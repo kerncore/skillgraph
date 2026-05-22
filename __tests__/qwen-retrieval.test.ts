@@ -153,6 +153,8 @@ describe('Qwen retrieval config', () => {
   it('defaults to disabled local Qwen retrieval with a matryoshka 256-dim index', () => {
     expect(DEFAULT_CONFIG.qwen).toMatchObject({
       enabled: false,
+      embeddingModelPath: 'kerncore/Qwen3-Embedding-0.6B-GGUF',
+      rerankerModelPath: 'kerncore/Qwen3-Reranker-0.6B-Q4_K_M',
       embeddingDim: 256,
       contextSize: 32768,
       gpuLayers: 0,
