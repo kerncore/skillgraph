@@ -765,6 +765,8 @@ export const DEFAULT_CONFIG: SkillGraphConfig = {
   trackCallSites: true,
   qwen: {
     enabled: false,
+    embeddingModelPath: 'kerncore/Qwen3-Embedding-0.6B-GGUF',
+    rerankerModelPath: 'kerncore/Qwen3-Reranker-0.6B-Q4_K_M',
     embeddingDim: 256,
     contextSize: 32768,
     gpuLayers: 0,
