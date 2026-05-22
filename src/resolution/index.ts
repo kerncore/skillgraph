@@ -6,7 +6,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { Node, UnresolvedReference, Edge } from '../types';
+import { Node, UnresolvedReference, Edge, ReferenceOccurrence } from '../types';
 import { QueryBuilder } from '../db/queries';
 import {
   UnresolvedRef,
@@ -540,6 +540,33 @@ export class ReferenceResolver {
   }
 
   /**
+   * Create persisted call/use occurrences from resolved AST references.
+   */
+  createReferenceOccurrences(resolved: ResolvedRef[]): ReferenceOccurrence[] {
+    return resolved.map((ref) => ({
+      fromNodeId: ref.original.fromNodeId,
+      targetNodeId: ref.targetNodeId,
+      referenceName: ref.original.referenceName,
+      referenceKind: ref.original.referenceKind,
+      filePath: ref.original.filePath,
+      language: ref.original.language,
+      line: ref.original.line,
+      column: ref.original.column,
+      sourceSlice: this.getReferenceSourceSlice(ref.original.filePath, ref.original.line),
+      astContext: `${ref.original.referenceKind} of ${ref.original.referenceName}`,
+    }));
+  }
+
+  private getReferenceSourceSlice(filePath: string, line: number): string | undefined {
+    const content = this.context.readFile(filePath);
+    if (!content) return undefined;
+    const lines = content.split('\n');
+    const start = Math.max(0, line - 3);
+    const end = Math.min(lines.length, line + 2);
+    return lines.slice(start, end).join('\n');
+  }
+
+  /**
    * Resolve and persist edges to database
    */
   resolveAndPersist(
@@ -551,9 +578,10 @@ export class ReferenceResolver {
     // Create edges from resolved references
     const edges = this.createEdges(result.resolved);
 
-    // Insert edges into database
+    // Insert edges and usage occurrences into database
     if (edges.length > 0) {
       this.queries.insertEdges(edges);
+      this.queries.insertReferenceOccurrencesBatch(this.createReferenceOccurrences(result.resolved));
     }
 
     // Clean up resolved refs from unresolved_refs table so metrics are accurate
@@ -598,10 +626,11 @@ export class ReferenceResolver {
 
       const result = this.resolveAll(batch);
 
-      // Persist edges immediately
+      // Persist edges and usage occurrences immediately
       const edges = this.createEdges(result.resolved);
       if (edges.length > 0) {
         this.queries.insertEdges(edges);
+        this.queries.insertReferenceOccurrencesBatch(this.createReferenceOccurrences(result.resolved));
       }
 
       // Clean up resolved refs so they don't appear in the next batch

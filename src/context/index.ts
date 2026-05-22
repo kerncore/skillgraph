@@ -19,6 +19,9 @@ import {
   BuildContextOptions,
   FindRelevantContextOptions,
   SearchResult,
+  QwenRetrievalConfig,
+  RerankResult,
+  RetrievalIntent,
 } from '../types';
 import { QueryBuilder } from '../db/queries';
 import { GraphTraverser } from '../graph';
@@ -26,6 +29,8 @@ import { formatContextAsMarkdown, formatContextAsJson } from './formatter';
 import { logDebug } from '../errors';
 import { validatePathWithinRoot } from '../utils';
 import { isTestFile, extractSearchTerms, scorePathRelevance, getStemVariants } from '../search/query-utils';
+import { EmbeddingProvider, RerankerProvider } from '../retrieval/qwen-gguf';
+import { detectRetrievalIntent, scopesForIntent } from '../retrieval/prompts';
 
 /**
  * Extract likely symbol names from a natural language query
@@ -148,6 +153,8 @@ const DEFAULT_BUILD_OPTIONS: Required<BuildContextOptions> = {
   searchLimit: 3,         // Reduced from 5 - fewer entry points
   traversalDepth: 1,      // Reduced from 2 - shallower graph expansion
   minScore: 0.3,
+  retrievalIntent: 'mixed',
+  useSemanticRetrieval: true,
 };
 
 /**
@@ -170,6 +177,8 @@ const DEFAULT_FIND_OPTIONS: Required<FindRelevantContextOptions> = {
   minScore: 0.3,
   edgeKinds: [],
   nodeKinds: HIGH_VALUE_NODE_KINDS, // Filter out imports/exports by default
+  retrievalIntent: 'mixed',
+  useSemanticRetrieval: true,
 };
 
 /**
@@ -182,15 +191,25 @@ export class ContextBuilder {
   private projectRoot: string;
   private queries: QueryBuilder;
   private traverser: GraphTraverser;
+  private qwenConfig?: QwenRetrievalConfig;
+  private embeddingProvider?: EmbeddingProvider;
+  private rerankerProvider?: RerankerProvider;
+  private lastRerankedResults: RerankResult[] = [];
 
   constructor(
     projectRoot: string,
     queries: QueryBuilder,
-    traverser: GraphTraverser
+    traverser: GraphTraverser,
+    qwenConfig?: QwenRetrievalConfig,
+    embeddingProvider?: EmbeddingProvider,
+    rerankerProvider?: RerankerProvider
   ) {
     this.projectRoot = projectRoot;
     this.queries = queries;
     this.traverser = traverser;
+    this.qwenConfig = qwenConfig;
+    this.embeddingProvider = embeddingProvider;
+    this.rerankerProvider = rerankerProvider;
   }
 
   /**
@@ -222,6 +241,8 @@ export class ContextBuilder {
       traversalDepth: opts.traversalDepth,
       maxNodes: opts.maxNodes,
       minScore: opts.minScore,
+      retrievalIntent: opts.retrievalIntent,
+      useSemanticRetrieval: opts.useSemanticRetrieval,
     });
 
     // Get entry points (nodes from semantic search)
@@ -252,6 +273,7 @@ export class ContextBuilder {
       subgraph,
       entryPoints,
       codeBlocks,
+      rerankedResults: this.lastRerankedResults,
       relatedFiles,
       summary,
       stats,
@@ -296,6 +318,8 @@ export class ContextBuilder {
     if (!query || query.trim().length === 0) {
       return { nodes, edges, roots };
     }
+
+    this.lastRerankedResults = [];
 
     // === HYBRID SEARCH ===
 
@@ -437,6 +461,18 @@ export class ContextBuilder {
       logDebug('Text search failed', { query, error: String(error) });
     }
 
+    // Step 3b: Dense Qwen retrieval over declaration/usage documents when configured.
+    let semanticResults: SearchResult[] = [];
+    const intent = opts.retrievalIntent ?? detectRetrievalIntent(query);
+    if (opts.useSemanticRetrieval !== false) {
+      semanticResults = await this.searchSemanticDocuments(
+        query,
+        intent,
+        Math.max(opts.searchLimit * 6, this.qwenConfig?.candidateLimit ?? 0)
+      );
+      logDebug('Semantic retrieval results', { count: semanticResults.length, intent });
+    }
+
     // Step 4: Merge results, taking the max score when duplicates appear
     // across search channels. Exact matches may have lower scores than FTS
     // results for the same node — use the best score from any channel.
@@ -456,6 +492,17 @@ export class ContextBuilder {
 
     // Add text search results, upgrading scores for duplicates
     for (const result of textResults) {
+      const existing = resultById.get(result.node.id);
+      if (existing) {
+        existing.score = Math.max(existing.score, result.score);
+      } else {
+        resultById.set(result.node.id, result);
+        searchResults.push(result);
+      }
+    }
+
+    // Add semantic results, upgrading scores for duplicates
+    for (const result of semanticResults) {
       const existing = resultById.get(result.node.id);
       if (existing) {
         existing.score = Math.max(existing.score, result.score);
@@ -910,6 +957,52 @@ export class ContextBuilder {
     return { nodes: finalNodes, edges: finalEdges, roots };
   }
 
+  private async searchSemanticDocuments(
+    query: string,
+    intent: RetrievalIntent,
+    limit: number
+  ): Promise<SearchResult[]> {
+    if (!this.qwenConfig?.enabled || !this.embeddingProvider) return [];
+
+    const queryEmbedding = await this.embeddingProvider.embedQuery(query, intent);
+    const denseResults = this.queries.searchEmbeddingDocuments(queryEmbedding, {
+      model: this.embeddingProvider.modelId,
+      dimension: this.embeddingProvider.dimension,
+      scopes: scopesForIntent(intent),
+      limit,
+    });
+
+    let ranked = denseResults.map((result) => ({
+      document: result.document,
+      node: result.node,
+      score: result.score,
+    }));
+
+    if (this.rerankerProvider && ranked.length > 0) {
+      const reranked = await this.rerankerProvider.rerank(
+        query,
+        ranked.map((result) => result.document),
+        intent
+      );
+      ranked = reranked.map((result) => {
+        const original = denseResults.find((dense) => dense.document.id === result.document.id);
+        return {
+          document: result.document,
+          node: original?.node,
+          score: result.score,
+        };
+      }).filter((result): result is RerankResult & { node: NonNullable<RerankResult['node']> } => result.node !== undefined);
+    }
+
+    ranked.sort((a, b) => b.score - a.score);
+    this.lastRerankedResults = ranked.slice(0, 2);
+
+    return ranked.slice(0, limit).map((result) => ({
+      node: result.node!,
+      score: 100 + result.score,
+    }));
+  }
+
   /**
    * Get the source code for a node
    *
@@ -1125,9 +1218,19 @@ export class ContextBuilder {
 export function createContextBuilder(
   projectRoot: string,
   queries: QueryBuilder,
-  traverser: GraphTraverser
+  traverser: GraphTraverser,
+  qwenConfig?: QwenRetrievalConfig,
+  embeddingProvider?: EmbeddingProvider,
+  rerankerProvider?: RerankerProvider
 ): ContextBuilder {
-  return new ContextBuilder(projectRoot, queries, traverser);
+  return new ContextBuilder(
+    projectRoot,
+    queries,
+    traverser,
+    qwenConfig,
+    embeddingProvider,
+    rerankerProvider
+  );
 }
 
 // Re-export formatter

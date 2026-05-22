@@ -487,6 +487,76 @@ export interface CodeGraphConfig {
     /** Node kind to assign */
     kind: NodeKind;
   }[];
+
+  /** Local Qwen3 GGUF retrieval settings */
+  qwen?: QwenRetrievalConfig;
+}
+
+export type EmbeddingDimension = 128 | 256 | 512 | 1024;
+
+export type RetrievalScope = 'declaration' | 'usage';
+
+export type RetrievalIntent = RetrievalScope | 'mixed';
+
+export interface QwenRetrievalConfig {
+  /** Enable Qwen3 GGUF semantic retrieval and reranking. */
+  enabled: boolean;
+
+  /** Path to Qwen3-Embedding GGUF model. */
+  embeddingModelPath?: string;
+
+  /** Path to Qwen3-Reranker GGUF model. */
+  rerankerModelPath?: string;
+
+  /** Matryoshka embedding dimension to store and search. */
+  embeddingDim: EmbeddingDimension;
+
+  /** llama.cpp context size. */
+  contextSize: number;
+
+  /** Number of layers to offload to GPU when supported. */
+  gpuLayers: number;
+
+  /** Number of dense candidates to rerank. */
+  candidateLimit: number;
+}
+
+export interface EmbeddingDocument {
+  id: string;
+  nodeId: string;
+  scope: RetrievalScope;
+  content: string;
+  contentHash: string;
+  model: string;
+  dimension: EmbeddingDimension;
+  embedding?: Float32Array;
+  updatedAt: number;
+}
+
+export interface ReferenceOccurrence {
+  id?: number;
+  fromNodeId: string;
+  targetNodeId?: string;
+  referenceName: string;
+  referenceKind: EdgeKind;
+  filePath: string;
+  language: Language;
+  line: number;
+  column: number;
+  sourceSlice?: string;
+  astContext?: string;
+}
+
+export interface EmbeddingSearchResult {
+  document: EmbeddingDocument;
+  node: Node;
+  score: number;
+}
+
+export interface RerankResult {
+  document: EmbeddingDocument;
+  node?: Node;
+  score: number;
 }
 
 /**
@@ -693,6 +763,13 @@ export const DEFAULT_CONFIG: CodeGraphConfig = {
   maxFileSize: 1024 * 1024, // 1MB
   extractDocstrings: true,
   trackCallSites: true,
+  qwen: {
+    enabled: false,
+    embeddingDim: 256,
+    contextSize: 32768,
+    gpuLayers: 0,
+    candidateLimit: 50,
+  },
 };
 
 // =============================================================================
@@ -778,6 +855,12 @@ export interface BuildContextOptions {
 
   /** Minimum semantic similarity score (default: 0.3) */
   minScore?: number;
+
+  /** Retrieval focus for dense Qwen search. */
+  retrievalIntent?: RetrievalIntent;
+
+  /** Whether to use Qwen semantic retrieval when configured. */
+  useSemanticRetrieval?: boolean;
 }
 
 /**
@@ -795,6 +878,9 @@ export interface TaskContext {
 
   /** Code blocks extracted from key nodes */
   codeBlocks: CodeBlock[];
+
+  /** Reranked semantic matches, if Qwen retrieval was enabled. */
+  rerankedResults?: RerankResult[];
 
   /** Files involved in this context */
   relatedFiles: string[];
@@ -838,4 +924,10 @@ export interface FindRelevantContextOptions {
 
   /** Node types to include */
   nodeKinds?: NodeKind[];
+
+  /** Retrieval focus for dense Qwen search. */
+  retrievalIntent?: RetrievalIntent;
+
+  /** Whether to use Qwen semantic retrieval when configured. */
+  useSemanticRetrieval?: boolean;
 }

@@ -49,6 +49,13 @@ import { GraphTraverser, GraphQueryManager } from './graph';
 import { ContextBuilder, createContextBuilder } from './context';
 import { Mutex, FileLock } from './utils';
 import { FileWatcher, WatchOptions } from './sync';
+import { createRetrievalIndexer, RetrievalIndexer } from './retrieval/indexer';
+import {
+  EmbeddingProvider,
+  QwenGgufEmbeddingProvider,
+  QwenGgufRerankerProvider,
+  RerankerProvider,
+} from './retrieval/qwen-gguf';
 
 // Re-export types for consumers
 export * from './types';
@@ -135,6 +142,9 @@ export class CodeGraph {
   private graphManager: GraphQueryManager;
   private traverser: GraphTraverser;
   private contextBuilder: ContextBuilder;
+  private retrievalIndexer: RetrievalIndexer | null = null;
+  private embeddingProvider: EmbeddingProvider | null = null;
+  private rerankerProvider: RerankerProvider | null = null;
 
   // Mutex for preventing concurrent indexing operations (in-process)
   private indexMutex = new Mutex();
@@ -162,10 +172,20 @@ export class CodeGraph {
     this.resolver = createResolver(projectRoot, queries);
     this.graphManager = new GraphQueryManager(queries);
     this.traverser = new GraphTraverser(queries);
+    if (config.qwen?.enabled && config.qwen.embeddingModelPath) {
+      this.embeddingProvider = new QwenGgufEmbeddingProvider(config.qwen);
+      if (config.qwen.rerankerModelPath) {
+        this.rerankerProvider = new QwenGgufRerankerProvider(config.qwen);
+      }
+      this.retrievalIndexer = createRetrievalIndexer(projectRoot, queries, config.qwen);
+    }
     this.contextBuilder = createContextBuilder(
       projectRoot,
       queries,
-      this.traverser
+      this.traverser,
+      config.qwen,
+      this.embeddingProvider ?? undefined,
+      this.rerankerProvider ?? undefined
     );
   }
 
@@ -354,6 +374,24 @@ export class CodeGraph {
       this.queries
     );
     this.resolver = createResolver(this.projectRoot, this.queries);
+    this.embeddingProvider = null;
+    this.rerankerProvider = null;
+    this.retrievalIndexer = null;
+    if (this.config.qwen?.enabled && this.config.qwen.embeddingModelPath) {
+      this.embeddingProvider = new QwenGgufEmbeddingProvider(this.config.qwen);
+      if (this.config.qwen.rerankerModelPath) {
+        this.rerankerProvider = new QwenGgufRerankerProvider(this.config.qwen);
+      }
+      this.retrievalIndexer = createRetrievalIndexer(this.projectRoot, this.queries, this.config.qwen);
+    }
+    this.contextBuilder = createContextBuilder(
+      this.projectRoot,
+      this.queries,
+      this.traverser,
+      this.config.qwen,
+      this.embeddingProvider ?? undefined,
+      this.rerankerProvider ?? undefined
+    );
   }
 
   /**
@@ -400,6 +438,8 @@ export class CodeGraph {
               total,
             });
           });
+
+          await this.indexRetrievalDocuments();
         }
 
         return result;
@@ -463,6 +503,7 @@ export class CodeGraph {
                 total,
               });
             });
+            await this.indexRetrievalDocuments();
           } else {
             // No git info — use batched resolution to avoid OOM
             const unresolvedCount = this.queries.getUnresolvedReferencesCount();
@@ -480,6 +521,7 @@ export class CodeGraph {
                 total,
               });
             });
+            await this.indexRetrievalDocuments();
           }
         }
 
@@ -597,6 +639,16 @@ export class CodeGraph {
    */
   reinitializeResolver(): void {
     this.resolver.initialize();
+  }
+
+  /**
+   * Build and embed declaration/usage retrieval documents when Qwen is enabled.
+   */
+  async indexRetrievalDocuments(): Promise<{ documents: number; embedded: number }> {
+    if (!this.retrievalIndexer || !this.embeddingProvider) {
+      return { documents: 0, embedded: 0 };
+    }
+    return this.retrievalIndexer.index(this.embeddingProvider);
   }
 
   // ===========================================================================

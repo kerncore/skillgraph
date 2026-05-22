@@ -341,6 +341,15 @@ export const tools: ToolDefinition[] = [
           description: 'How many levels of dependencies to traverse (default: 2)',
           default: 2,
         },
+        limit: {
+          type: 'number',
+          description: 'Maximum callers to return in this page (default: 10)',
+          default: 10,
+        },
+        cursor: {
+          type: 'string',
+          description: 'Opaque cursor returned by a previous codegraph_impact response',
+        },
         projectPath: projectPathProperty,
       },
       required: ['symbol'],
@@ -751,6 +760,8 @@ export class ToolHandler {
 
     const cg = this.getCodeGraph(args.projectPath as string | undefined);
     const depth = clamp((args.depth as number) || 2, 1, 10);
+    const limit = clamp((args.limit as number) || 10, 1, 50);
+    const cursor = typeof args.cursor === 'string' ? args.cursor : undefined;
 
     const allMatches = this.findAllSymbols(cg, symbol);
     if (allMatches.nodes.length === 0) {
@@ -782,7 +793,7 @@ export class ToolHandler {
       roots: allMatches.nodes.map(n => n.id),
     };
 
-    const formatted = this.formatImpact(symbol, mergedImpact) + allMatches.note;
+    const formatted = this.formatImpact(symbol, mergedImpact, { limit, cursor }) + allMatches.note;
     return this.textResult(this.truncateOutput(formatted));
   }
 
@@ -1668,32 +1679,142 @@ export class ToolHandler {
     return lines.join('\n');
   }
 
-  private formatImpact(symbol: string, impact: Subgraph): string {
-    const nodeCount = impact.nodes.size;
+  private formatImpact(
+    symbol: string,
+    impact: Subgraph,
+    options: { limit: number; cursor?: string }
+  ): string {
+    const roots = impact.roots
+      .map((id) => impact.nodes.get(id))
+      .filter((node): node is Node => node !== undefined);
+    const target = roots[0];
+    const targetId = target?.id ?? symbol;
+    const offset = this.decodeCursor(options.cursor);
 
-    // Compact format: just list affected symbols grouped by file
-    const lines: string[] = [
-      `## Impact: "${symbol}" affects ${nodeCount} symbols`,
-      '',
-    ];
+    const paths = this.buildImpactPaths(impact);
+    const affected = [...paths.entries()]
+      .filter(([id]) => !impact.roots.includes(id))
+      .map(([id, path]) => ({ node: impact.nodes.get(id)!, path }))
+      .filter((item) => item.node !== undefined)
+      .filter((item) => !['file', 'import', 'export'].includes(item.node.kind))
+      .sort((a, b) => {
+        if (a.path.length !== b.path.length) return a.path.length - b.path.length;
+        return a.node.filePath.localeCompare(b.node.filePath) || a.node.startLine - b.node.startLine;
+      });
 
-    // Group by file
-    const byFile = new Map<string, Node[]>();
-    for (const node of impact.nodes.values()) {
-      const existing = byFile.get(node.filePath) || [];
-      existing.push(node);
-      byFile.set(node.filePath, existing);
+    const page = affected.slice(offset, offset + options.limit);
+    const nextOffset = offset + options.limit;
+    const nextCursor = nextOffset < affected.length
+      ? Buffer.from(JSON.stringify({ offset: nextOffset })).toString('base64')
+      : null;
+
+    const directCallers = affected.filter((item) => item.path.length === 2).length;
+    const modules = new Set(affected.map((item) => item.node.filePath.split('/')[0] ?? item.node.filePath));
+    const risk = this.calculateImpactRisk(target, directCallers, affected);
+
+    const payload = {
+      target: targetId,
+      signature: this.formatImpactSignature(target),
+      direction: 'upstream',
+      risk,
+      counts: {
+        direct_callers: directCallers,
+        transitive_callers: affected.length,
+        modules: modules.size,
+      },
+      callers: page.map(({ node, path }) => ({
+        id: node.id,
+        file: `${node.filePath}:${node.startLine || 1}`,
+        ...(node.kind === 'function' ? {} : { type: node.kind }),
+        path_to_target: path.map((id) => impact.nodes.get(id)?.name ?? id),
+        call_sites: this.countImpactCallSites(impact, path),
+      })),
+      next_cursor: nextCursor,
+    };
+
+    return JSON.stringify(payload, null, 2);
+  }
+
+  private formatImpactSignature(node: Node | undefined): string | null {
+    if (!node?.signature) return null;
+    return node.signature.startsWith('(') ? `${node.name}${node.signature}` : node.signature;
+  }
+
+  private decodeCursor(cursor?: string): number {
+    if (!cursor) return 0;
+    try {
+      const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString('utf8')) as { offset?: unknown };
+      return typeof decoded.offset === 'number' && decoded.offset > 0 ? Math.floor(decoded.offset) : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private buildImpactPaths(impact: Subgraph): Map<string, string[]> {
+    const paths = new Map<string, string[]>();
+    const byTarget = new Map<string, Edge[]>();
+    for (const edge of impact.edges) {
+      if (edge.kind === 'contains') continue;
+      const existing = byTarget.get(edge.target) ?? [];
+      existing.push(edge);
+      byTarget.set(edge.target, existing);
     }
 
-    for (const [file, nodes] of byFile) {
-      lines.push(`**${file}:**`);
-      // Compact: inline list
-      const nodeList = nodes.map(n => `${n.name}:${n.startLine}`).join(', ');
-      lines.push(nodeList);
-      lines.push('');
+    const queue: string[] = [];
+    for (const root of impact.roots) {
+      paths.set(root, [root]);
+      queue.push(root);
     }
 
-    return lines.join('\n');
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const currentPath = paths.get(current)!;
+      for (const edge of byTarget.get(current) ?? []) {
+        if (!impact.nodes.has(edge.source) || paths.has(edge.source)) continue;
+        paths.set(edge.source, [edge.source, ...currentPath]);
+        queue.push(edge.source);
+      }
+    }
+
+    for (const id of impact.nodes.keys()) {
+      if (!paths.has(id)) paths.set(id, [id]);
+    }
+    return paths;
+  }
+
+  private countImpactCallSites(impact: Subgraph, path: string[]): number {
+    if (path.length < 2) return 0;
+    const source = path[0]!;
+    const target = path[1]!;
+    return impact.edges.filter((edge) => edge.source === source && edge.target === target).length;
+  }
+
+  private calculateImpactRisk(
+    target: Node | undefined,
+    directCallers: number,
+    affected: Array<{ node: Node; path: string[] }>
+  ): { level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'; reasons: string[] } {
+    const reasons: string[] = [];
+    const entrypoint = affected.some(({ node }) => {
+      const name = node.name.toLowerCase();
+      return ['main', 'start', 'run', 'init', 'open', 'handletoolscall'].includes(name) || node.filePath.includes('/bin/');
+    });
+    if (entrypoint) reasons.push('reached_from_entrypoint');
+    if (directCallers >= 5 || affected.length >= 10) reasons.push('high_fanin');
+    if (target?.isExported) reasons.push('exported_symbol');
+    if (affected.some(({ path }) => path.length > 3)) reasons.push('deep_transitive_chain');
+    if (reasons.length === 0) reasons.push('localized_impact');
+
+    let level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' = 'LOW';
+    if ((entrypoint && affected.length >= 5) || directCallers >= 10) {
+      level = 'CRITICAL';
+    } else if (directCallers >= 5 || affected.length >= 10 || entrypoint) {
+      level = 'HIGH';
+    } else if (directCallers > 0 || affected.length > 0) {
+      level = 'MEDIUM';
+    }
+
+    return { level, reasons };
   }
 
   private formatNodeDetails(node: Node, code: string | null): string {

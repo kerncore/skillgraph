@@ -92,6 +92,19 @@ export function validateConfig(config: unknown): config is CodeGraphConfig {
     if (typeof framework.name !== 'string') return false;
   }
 
+  // Validate Qwen retrieval config if present
+  if (c.qwen !== undefined) {
+    if (typeof c.qwen !== 'object' || c.qwen === null) return false;
+    const qwen = c.qwen as Record<string, unknown>;
+    if (typeof qwen.enabled !== 'boolean') return false;
+    if (qwen.embeddingModelPath !== undefined && typeof qwen.embeddingModelPath !== 'string') return false;
+    if (qwen.rerankerModelPath !== undefined && typeof qwen.rerankerModelPath !== 'string') return false;
+    if (![128, 256, 512, 1024].includes(qwen.embeddingDim as number)) return false;
+    if (typeof qwen.contextSize !== 'number' || qwen.contextSize < 1024) return false;
+    if (typeof qwen.gpuLayers !== 'number' || qwen.gpuLayers < 0) return false;
+    if (typeof qwen.candidateLimit !== 'number' || qwen.candidateLimit < 2) return false;
+  }
+
   // Validate custom patterns if present
   if (c.customPatterns !== undefined) {
     if (!Array.isArray(c.customPatterns)) return false;
@@ -128,6 +141,10 @@ function mergeConfig(
     extractDocstrings: overrides.extractDocstrings ?? defaults.extractDocstrings,
     trackCallSites: overrides.trackCallSites ?? defaults.trackCallSites,
     customPatterns: overrides.customPatterns ?? defaults.customPatterns,
+    qwen: {
+      ...(defaults.qwen ?? DEFAULT_CONFIG.qwen!),
+      ...(overrides.qwen ?? {}),
+    },
   };
 }
 

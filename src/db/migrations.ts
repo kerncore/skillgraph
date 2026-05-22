@@ -9,7 +9,7 @@ import { SqliteDatabase } from './sqlite-adapter';
 /**
  * Current schema version
  */
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 /**
  * Migration definition
@@ -62,6 +62,49 @@ const migrations: Migration[] = [
       db.exec(`
         DROP INDEX IF EXISTS idx_edges_source;
         DROP INDEX IF EXISTS idx_edges_target;
+      `);
+    },
+  },
+  {
+    version: 5,
+    description: 'Add Qwen retrieval documents and resolved reference occurrences',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS reference_occurrences (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          from_node_id TEXT NOT NULL,
+          target_node_id TEXT,
+          reference_name TEXT NOT NULL,
+          reference_kind TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          language TEXT NOT NULL,
+          line INTEGER NOT NULL,
+          col INTEGER NOT NULL,
+          source_slice TEXT,
+          ast_context TEXT,
+          FOREIGN KEY (from_node_id) REFERENCES nodes(id) ON DELETE CASCADE,
+          FOREIGN KEY (target_node_id) REFERENCES nodes(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS embedding_documents (
+          id TEXT PRIMARY KEY,
+          node_id TEXT NOT NULL,
+          scope TEXT NOT NULL CHECK(scope IN ('declaration', 'usage')),
+          content TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          model TEXT NOT NULL,
+          dimension INTEGER NOT NULL,
+          embedding BLOB,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_reference_occurrences_from ON reference_occurrences(from_node_id);
+        CREATE INDEX IF NOT EXISTS idx_reference_occurrences_target ON reference_occurrences(target_node_id);
+        CREATE INDEX IF NOT EXISTS idx_reference_occurrences_file ON reference_occurrences(file_path);
+        CREATE INDEX IF NOT EXISTS idx_embedding_documents_node ON embedding_documents(node_id);
+        CREATE INDEX IF NOT EXISTS idx_embedding_documents_scope ON embedding_documents(scope);
+        CREATE INDEX IF NOT EXISTS idx_embedding_documents_model_dim ON embedding_documents(model, dimension);
       `);
     },
   },

@@ -16,6 +16,11 @@ import {
   GraphStats,
   SearchOptions,
   SearchResult,
+  EmbeddingDocument,
+  EmbeddingDimension,
+  EmbeddingSearchResult,
+  ReferenceOccurrence,
+  RetrievalScope,
 } from '../types';
 import { safeJsonParse } from '../utils';
 import { kindBonus, nameMatchBonus, scorePathRelevance } from '../search/query-utils';
@@ -81,6 +86,32 @@ interface UnresolvedRefRow {
   language: string;
 }
 
+interface ReferenceOccurrenceRow {
+  id: number;
+  from_node_id: string;
+  target_node_id: string | null;
+  reference_name: string;
+  reference_kind: string;
+  file_path: string;
+  language: string;
+  line: number;
+  col: number;
+  source_slice: string | null;
+  ast_context: string | null;
+}
+
+interface EmbeddingDocumentRow {
+  id: string;
+  node_id: string;
+  scope: string;
+  content: string;
+  content_hash: string;
+  model: string;
+  dimension: number;
+  embedding: Uint8Array | Buffer | null;
+  updated_at: number;
+}
+
 /**
  * Convert database row to Node object
  */
@@ -137,6 +168,52 @@ function rowToFileRecord(row: FileRow): FileRecord {
     indexedAt: row.indexed_at,
     nodeCount: row.node_count,
     errors: row.errors ? safeJsonParse(row.errors, undefined) : undefined,
+  };
+}
+
+function embeddingToBlob(embedding: Float32Array): Buffer {
+  return Buffer.from(
+    embedding.buffer,
+    embedding.byteOffset,
+    embedding.byteLength
+  );
+}
+
+function blobToEmbedding(blob: Uint8Array | Buffer | null): Float32Array | undefined {
+  if (!blob) return undefined;
+  const copy = new Uint8Array(blob.byteLength);
+  copy.set(blob);
+  return new Float32Array(copy.buffer);
+}
+
+function normalizeVector(vector: Float32Array): Float32Array {
+  let sum = 0;
+  for (const v of vector) sum += v * v;
+  const norm = Math.sqrt(sum);
+  if (norm === 0) return vector;
+  const out = new Float32Array(vector.length);
+  for (let i = 0; i < vector.length; i++) out[i] = vector[i]! / norm;
+  return out;
+}
+
+function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  const len = Math.min(a.length, b.length);
+  let sum = 0;
+  for (let i = 0; i < len; i++) sum += a[i]! * b[i]!;
+  return sum;
+}
+
+function rowToEmbeddingDocument(row: EmbeddingDocumentRow): EmbeddingDocument {
+  return {
+    id: row.id,
+    nodeId: row.node_id,
+    scope: row.scope as RetrievalScope,
+    content: row.content,
+    contentHash: row.content_hash,
+    model: row.model,
+    dimension: row.dimension as EmbeddingDimension,
+    embedding: blobToEmbedding(row.embedding),
+    updatedAt: row.updated_at,
   };
 }
 
@@ -345,6 +422,7 @@ export class QueryBuilder {
     if (!this.stmts.deleteNodesByFile) {
       this.stmts.deleteNodesByFile = this.db.prepare('DELETE FROM nodes WHERE file_path = ?');
     }
+    this.deleteReferenceOccurrencesByFile(filePath);
     // Invalidate cache for nodes in this file
     for (const [id, node] of this.nodeCache) {
       if (node.filePath === filePath) {
@@ -1355,6 +1433,194 @@ export class QueryBuilder {
   }
 
   // ===========================================================================
+  // Reference Occurrences and Embedding Documents
+  // ===========================================================================
+
+  insertReferenceOccurrence(occurrence: ReferenceOccurrence): void {
+    this.db.prepare(`
+      INSERT INTO reference_occurrences (
+        from_node_id, target_node_id, reference_name, reference_kind,
+        file_path, language, line, col, source_slice, ast_context
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      occurrence.fromNodeId,
+      occurrence.targetNodeId ?? null,
+      occurrence.referenceName,
+      occurrence.referenceKind,
+      occurrence.filePath,
+      occurrence.language,
+      occurrence.line,
+      occurrence.column,
+      occurrence.sourceSlice ?? null,
+      occurrence.astContext ?? null
+    );
+  }
+
+  insertReferenceOccurrencesBatch(occurrences: ReferenceOccurrence[]): void {
+    if (occurrences.length === 0) return;
+    const stmt = this.db.prepare(`
+      INSERT INTO reference_occurrences (
+        from_node_id, target_node_id, reference_name, reference_kind,
+        file_path, language, line, col, source_slice, ast_context
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    this.db.transaction(() => {
+      for (const occurrence of occurrences) {
+        stmt.run(
+          occurrence.fromNodeId,
+          occurrence.targetNodeId ?? null,
+          occurrence.referenceName,
+          occurrence.referenceKind,
+          occurrence.filePath,
+          occurrence.language,
+          occurrence.line,
+          occurrence.column,
+          occurrence.sourceSlice ?? null,
+          occurrence.astContext ?? null
+        );
+      }
+    })();
+  }
+
+  deleteReferenceOccurrencesByFile(filePath: string): void {
+    this.db.prepare('DELETE FROM reference_occurrences WHERE file_path = ?').run(filePath);
+  }
+
+  getReferenceOccurrencesByTarget(targetNodeId: string, limit = 20): ReferenceOccurrence[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM reference_occurrences
+      WHERE target_node_id = ?
+      ORDER BY file_path, line
+      LIMIT ?
+    `).all(targetNodeId, limit) as ReferenceOccurrenceRow[];
+    return rows.map((row) => ({
+      id: row.id,
+      fromNodeId: row.from_node_id,
+      targetNodeId: row.target_node_id ?? undefined,
+      referenceName: row.reference_name,
+      referenceKind: row.reference_kind as EdgeKind,
+      filePath: row.file_path,
+      language: row.language as Language,
+      line: row.line,
+      column: row.col,
+      sourceSlice: row.source_slice ?? undefined,
+      astContext: row.ast_context ?? undefined,
+    }));
+  }
+
+  upsertEmbeddingDocument(document: EmbeddingDocument): void {
+    this.db.prepare(`
+      INSERT INTO embedding_documents (
+        id, node_id, scope, content, content_hash, model, dimension, embedding, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        node_id = excluded.node_id,
+        scope = excluded.scope,
+        content = excluded.content,
+        content_hash = excluded.content_hash,
+        model = excluded.model,
+        dimension = excluded.dimension,
+        embedding = excluded.embedding,
+        updated_at = excluded.updated_at
+    `).run(
+      document.id,
+      document.nodeId,
+      document.scope,
+      document.content,
+      document.contentHash,
+      document.model,
+      document.dimension,
+      document.embedding ? embeddingToBlob(normalizeVector(document.embedding)) : null,
+      document.updatedAt
+    );
+  }
+
+  upsertEmbeddingDocuments(documents: EmbeddingDocument[]): void {
+    if (documents.length === 0) return;
+    this.db.transaction(() => {
+      for (const document of documents) {
+        this.upsertEmbeddingDocument(document);
+      }
+    })();
+  }
+
+  getEmbeddingDocument(id: string): EmbeddingDocument | null {
+    const row = this.db.prepare('SELECT * FROM embedding_documents WHERE id = ?').get(id) as EmbeddingDocumentRow | undefined;
+    return row ? rowToEmbeddingDocument(row) : null;
+  }
+
+  getEmbeddingDocumentsWithoutVectors(model: string, dimension: EmbeddingDimension): EmbeddingDocument[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM embedding_documents
+      WHERE model = ? AND dimension = ? AND embedding IS NULL
+      ORDER BY id
+    `).all(model, dimension) as EmbeddingDocumentRow[];
+    return rows.map(rowToEmbeddingDocument);
+  }
+
+  searchEmbeddingDocuments(
+    queryEmbedding: Float32Array,
+    options: { model: string; dimension: EmbeddingDimension; scopes?: RetrievalScope[]; limit: number }
+  ): EmbeddingSearchResult[] {
+    let sql = `
+      SELECT
+        embedding_documents.id AS doc_id,
+        embedding_documents.node_id AS doc_node_id,
+        embedding_documents.scope AS doc_scope,
+        embedding_documents.content AS doc_content,
+        embedding_documents.content_hash AS doc_content_hash,
+        embedding_documents.model AS doc_model,
+        embedding_documents.dimension AS doc_dimension,
+        embedding_documents.embedding AS doc_embedding,
+        embedding_documents.updated_at AS doc_updated_at,
+        nodes.*
+      FROM embedding_documents
+      JOIN nodes ON nodes.id = embedding_documents.node_id
+      WHERE embedding_documents.model = ?
+        AND embedding_documents.dimension = ?
+        AND embedding_documents.embedding IS NOT NULL
+    `;
+    const params: (string | number)[] = [options.model, options.dimension];
+    if (options.scopes && options.scopes.length > 0) {
+      sql += ` AND embedding_documents.scope IN (${options.scopes.map(() => '?').join(',')})`;
+      params.push(...options.scopes);
+    }
+    const rows = this.db.prepare(sql).all(...params) as Array<NodeRow & {
+      doc_id: string;
+      doc_node_id: string;
+      doc_scope: string;
+      doc_content: string;
+      doc_content_hash: string;
+      doc_model: string;
+      doc_dimension: number;
+      doc_embedding: Uint8Array | Buffer | null;
+      doc_updated_at: number;
+    }>;
+    const normalizedQuery = normalizeVector(queryEmbedding);
+    const results: EmbeddingSearchResult[] = [];
+    for (const row of rows) {
+      const document = rowToEmbeddingDocument({
+        id: row.doc_id,
+        node_id: row.doc_node_id,
+        scope: row.doc_scope,
+        content: row.doc_content,
+        content_hash: row.doc_content_hash,
+        model: row.doc_model,
+        dimension: row.doc_dimension,
+        embedding: row.doc_embedding,
+        updated_at: row.doc_updated_at,
+      });
+      if (!document.embedding) continue;
+      results.push({
+        document,
+        node: rowToNode(row),
+        score: cosineSimilarity(normalizedQuery, document.embedding),
+      });
+    }
+    return results.sort((a, b) => b.score - a.score).slice(0, options.limit);
+  }
+
+  // ===========================================================================
   // Statistics
   // ===========================================================================
 
@@ -1445,6 +1711,8 @@ export class QueryBuilder {
   clear(): void {
     this.nodeCache.clear();
     this.db.transaction(() => {
+      this.db.exec('DELETE FROM embedding_documents');
+      this.db.exec('DELETE FROM reference_occurrences');
       this.db.exec('DELETE FROM unresolved_refs');
       this.db.exec('DELETE FROM edges');
       this.db.exec('DELETE FROM nodes');

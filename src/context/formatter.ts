@@ -21,6 +21,18 @@ export function formatContextAsMarkdown(context: TaskContext): string {
   lines.push('## Code Context\n');
   lines.push(`**Query:** ${context.query}\n`);
 
+  if (context.rerankedResults && context.rerankedResults.length > 0) {
+    lines.push('### Top Reranked Matches\n');
+    for (const result of context.rerankedResults.slice(0, 2)) {
+      const node = result.node;
+      const label = node
+        ? `${node.name} (${node.kind}) - ${node.filePath}:${node.startLine}`
+        : `${result.document.scope} - ${result.document.nodeId}`;
+      lines.push(`- **${label}** score=${result.score.toFixed(4)} scope=${result.document.scope}`);
+    }
+    lines.push('');
+  }
+
   // Entry points - compact format
   if (context.entryPoints.length > 0) {
     lines.push('### Entry Points\n');
@@ -83,6 +95,12 @@ export function formatContextAsJson(context: TaskContext): string {
     entryPoints: context.entryPoints.map(serializeNode),
     nodes: Array.from(context.subgraph.nodes.values()).map(serializeNode),
     edges: context.subgraph.edges.map(serializeEdge),
+    rerankedResults: context.rerankedResults?.map((result) => ({
+      node: result.node ? serializeNode(result.node) : undefined,
+      score: result.score,
+      scope: result.document.scope,
+      documentId: result.document.id,
+    })),
     codeBlocks: context.codeBlocks.map((block) => ({
       filePath: block.filePath,
       startLine: block.startLine,

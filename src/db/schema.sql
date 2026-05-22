@@ -80,6 +80,35 @@ CREATE TABLE IF NOT EXISTS unresolved_refs (
     FOREIGN KEY (from_node_id) REFERENCES nodes(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS reference_occurrences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_node_id TEXT NOT NULL,
+    target_node_id TEXT,
+    reference_name TEXT NOT NULL,
+    reference_kind TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    language TEXT NOT NULL,
+    line INTEGER NOT NULL,
+    col INTEGER NOT NULL,
+    source_slice TEXT,
+    ast_context TEXT,
+    FOREIGN KEY (from_node_id) REFERENCES nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY (target_node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS embedding_documents (
+    id TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL,
+    scope TEXT NOT NULL CHECK(scope IN ('declaration', 'usage')),
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    embedding BLOB,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
 -- =============================================================================
 -- Indexes for Query Performance
 -- =============================================================================
@@ -142,6 +171,12 @@ CREATE INDEX IF NOT EXISTS idx_unresolved_name ON unresolved_refs(reference_name
 CREATE INDEX IF NOT EXISTS idx_unresolved_file_path ON unresolved_refs(file_path);
 CREATE INDEX IF NOT EXISTS idx_unresolved_from_name ON unresolved_refs(from_node_id, reference_name);
 CREATE INDEX IF NOT EXISTS idx_edges_provenance ON edges(provenance);
+CREATE INDEX IF NOT EXISTS idx_reference_occurrences_from ON reference_occurrences(from_node_id);
+CREATE INDEX IF NOT EXISTS idx_reference_occurrences_target ON reference_occurrences(target_node_id);
+CREATE INDEX IF NOT EXISTS idx_reference_occurrences_file ON reference_occurrences(file_path);
+CREATE INDEX IF NOT EXISTS idx_embedding_documents_node ON embedding_documents(node_id);
+CREATE INDEX IF NOT EXISTS idx_embedding_documents_scope ON embedding_documents(scope);
+CREATE INDEX IF NOT EXISTS idx_embedding_documents_model_dim ON embedding_documents(model, dimension);
 
 -- Project metadata for version/provenance tracking
 CREATE TABLE IF NOT EXISTS project_metadata (
