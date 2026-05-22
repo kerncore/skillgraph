@@ -291,7 +291,7 @@ export class QueryBuilder {
 
     // Validate required fields to prevent SQLite bind errors
     if (!node.id || !node.kind || !node.name || !node.filePath || !node.language) {
-      console.error('[CodeGraph] Skipping node with missing required fields:', {
+      console.error('[SkillGraph] Skipping node with missing required fields:', {
         id: node.id,
         kind: node.kind,
         name: node.name,
@@ -375,7 +375,7 @@ export class QueryBuilder {
 
     // Validate required fields
     if (!node.id || !node.kind || !node.name || !node.filePath || !node.language) {
-      console.error('[CodeGraph] Skipping node update with missing required fields:', node.id);
+      console.error('[SkillGraph] Skipping node update with missing required fields:', node.id);
       return;
     }
 
@@ -1540,6 +1540,23 @@ export class QueryBuilder {
     this.db.transaction(() => {
       for (const document of documents) {
         this.upsertEmbeddingDocument(document);
+      }
+    })();
+  }
+
+  deleteEmbeddingDocumentsExcept(model: string, dimension: EmbeddingDimension, keepIds: Set<string>): void {
+    const rows = this.db.prepare(`
+      SELECT id FROM embedding_documents
+      WHERE model = ? AND dimension = ?
+    `).all(model, dimension) as Array<{ id: string }>;
+    if (rows.length === 0) return;
+
+    const deleteStmt = this.db.prepare('DELETE FROM embedding_documents WHERE id = ?');
+    this.db.transaction(() => {
+      for (const row of rows) {
+        if (!keepIds.has(row.id)) {
+          deleteStmt.run(row.id);
+        }
       }
     })();
   }

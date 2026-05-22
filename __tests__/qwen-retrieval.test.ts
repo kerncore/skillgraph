@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
   detectRetrievalIntent,
   formatRerankInstruction,
@@ -6,7 +9,8 @@ import {
   scopesForIntent,
   taskForIntent,
 } from '../src/retrieval/prompts';
-import { DEFAULT_CONFIG } from '../src/types';
+import { RetrievalIndexer } from '../src/retrieval/indexer';
+import { DEFAULT_CONFIG, Node, ReferenceOccurrence } from '../src/types';
 import { validateConfig } from '../src/config';
 
 describe('Qwen retrieval prompt formatting', () => {
@@ -38,6 +42,110 @@ describe('Qwen retrieval prompt formatting', () => {
     expect(scopesForIntent('mixed')).toEqual(['declaration', 'usage']);
     expect(taskForIntent('declaration')).toContain('declarations');
     expect(taskForIntent('usage')).toContain('usage sites');
+  });
+});
+
+describe('Qwen retrieval document indexing', () => {
+  it('indexes consumer usage documents on the consumer node instead of duplicating target blocks', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillgraph-qwen-docs-'));
+    try {
+      fs.mkdirSync(path.join(root, 'src'));
+      fs.writeFileSync(
+        path.join(root, 'src', 'flow.ts'),
+        `export function apiTarget(value: string) {\n  return value.trim();\n}\n\nexport function secondTarget(value: string) {\n  return value.toUpperCase();\n}\n\nfunction callApi(value: string) {\n  return secondTarget(apiTarget(value));\n}\n`
+      );
+
+      const baseNode = {
+        kind: 'function',
+        filePath: 'src/flow.ts',
+        language: 'typescript',
+        startColumn: 0,
+        endColumn: 1,
+        updatedAt: 1,
+      } as const;
+      const apiNode: Node = {
+        ...baseNode,
+        id: 'api-node',
+        name: 'apiTarget',
+        qualifiedName: 'src/flow.ts::apiTarget',
+        startLine: 1,
+        endLine: 3,
+        signature: 'apiTarget(value: string)',
+        isExported: true,
+      };
+      const consumerNode: Node = {
+        ...baseNode,
+        id: 'consumer-node',
+        name: 'callApi',
+        qualifiedName: 'src/flow.ts::callApi',
+        startLine: 9,
+        endLine: 11,
+        signature: 'callApi(value: string)',
+        isExported: false,
+      };
+      const secondNode: Node = {
+        ...baseNode,
+        id: 'second-node',
+        name: 'secondTarget',
+        qualifiedName: 'src/flow.ts::secondTarget',
+        startLine: 5,
+        endLine: 7,
+        signature: 'secondTarget(value: string)',
+        isExported: true,
+      };
+      const apiOccurrence: ReferenceOccurrence = {
+        fromNodeId: consumerNode.id,
+        targetNodeId: apiNode.id,
+        referenceName: 'apiTarget',
+        referenceKind: 'calls',
+        filePath: 'src/flow.ts',
+        language: 'typescript',
+        line: 10,
+        column: 23,
+        sourceSlice: 'return secondTarget(apiTarget(value));',
+      };
+      const secondOccurrence: ReferenceOccurrence = {
+        fromNodeId: consumerNode.id,
+        targetNodeId: secondNode.id,
+        referenceName: 'secondTarget',
+        referenceKind: 'calls',
+        filePath: 'src/flow.ts',
+        language: 'typescript',
+        line: 10,
+        column: 9,
+        sourceSlice: 'return secondTarget(apiTarget(value));',
+      };
+      const nodes = new Map([
+        [apiNode.id, apiNode],
+        [secondNode.id, secondNode],
+        [consumerNode.id, consumerNode],
+      ]);
+      const queries = {
+        getAllNodes: () => [apiNode, secondNode, consumerNode],
+        getNodeById: (id: string) => nodes.get(id) ?? null,
+        getReferenceOccurrencesByTarget: (id: string) => {
+          if (id === apiNode.id) return [apiOccurrence];
+          if (id === secondNode.id) return [secondOccurrence];
+          return [];
+        },
+      };
+
+      const documents = new RetrievalIndexer(root, queries as any, DEFAULT_CONFIG.qwen!)
+        .buildDocuments('qwen-test', 256);
+      const declarationDocs = documents.filter((document) => document.scope === 'declaration');
+      const usageDocs = documents.filter((document) => document.scope === 'usage');
+
+      expect(declarationDocs.map((document) => document.nodeId)).toEqual([apiNode.id, secondNode.id]);
+      expect(usageDocs).toHaveLength(1);
+      expect(usageDocs[0]!.nodeId).toBe(consumerNode.id);
+      expect(usageDocs[0]!.id).toContain(`usage:${consumerNode.id}`);
+      expect(usageDocs[0]!.content).toContain('Usage by function src/flow.ts::callApi');
+      expect(usageDocs[0]!.content).toContain('- function src/flow.ts::apiTarget');
+      expect(usageDocs[0]!.content).toContain('- function src/flow.ts::secondTarget');
+      expect(documents.some((document) => document.scope === 'usage' && document.nodeId === apiNode.id)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

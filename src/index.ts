@@ -1,5 +1,5 @@
 /**
- * CodeGraph
+ * SkillGraph
  *
  * A local-first code intelligence system that builds a semantic
  * knowledge graph from any codebase.
@@ -7,7 +7,7 @@
 
 import * as path from 'path';
 import {
-  CodeGraphConfig,
+  SkillGraphConfig,
   Node,
   Edge,
   FileRecord,
@@ -22,6 +22,8 @@ import {
   TaskContext,
   BuildContextOptions,
   FindRelevantContextOptions,
+  RetrievalIntent,
+  RerankResult,
 } from './types';
 import { DatabaseConnection, getDatabasePath } from './db';
 import { QueryBuilder } from './db/queries';
@@ -62,16 +64,16 @@ export * from './types';
 export { getDatabasePath } from './db';
 export { getConfigPath } from './config';
 export {
-  getCodeGraphDir,
+  getSkillGraphDir,
   isInitialized,
-  findNearestCodeGraphRoot,
-  CODEGRAPH_DIR,
+  findNearestSkillGraphRoot,
+  SKILLGRAPH_DIR,
 } from './directory';
 export { IndexProgress, IndexResult, SyncResult } from './extraction';
 export { detectLanguage, isLanguageSupported, isGrammarLoaded, getSupportedLanguages, initGrammars, loadGrammarsForLanguages, loadAllGrammars } from './extraction';
 export { ResolutionResult } from './resolution';
 export {
-  CodeGraphError,
+  SkillGraphError,
   FileError,
   ParseError,
   DatabaseError,
@@ -89,11 +91,11 @@ export { FileWatcher, WatchOptions } from './sync';
 export { MCPServer } from './mcp';
 
 /**
- * Options for initializing a new CodeGraph project
+ * Options for initializing a new SkillGraph project
  */
 export interface InitOptions {
   /** Custom configuration overrides */
-  config?: Partial<CodeGraphConfig>;
+  config?: Partial<SkillGraphConfig>;
 
   /** Whether to run initial indexing after init */
   index?: boolean;
@@ -103,7 +105,7 @@ export interface InitOptions {
 }
 
 /**
- * Options for opening an existing CodeGraph project
+ * Options for opening an existing SkillGraph project
  */
 export interface OpenOptions {
   /** Whether to run sync if files have changed */
@@ -128,14 +130,14 @@ export interface IndexOptions {
 }
 
 /**
- * Main CodeGraph class
+ * Main SkillGraph class
  *
  * Provides the primary interface for interacting with the code knowledge graph.
  */
-export class CodeGraph {
+export class SkillGraph {
   private db: DatabaseConnection;
   private queries: QueryBuilder;
-  private config: CodeGraphConfig;
+  private config: SkillGraphConfig;
   private projectRoot: string;
   private orchestrator: ExtractionOrchestrator;
   private resolver: ReferenceResolver;
@@ -158,7 +160,7 @@ export class CodeGraph {
   private constructor(
     db: DatabaseConnection,
     queries: QueryBuilder,
-    config: CodeGraphConfig,
+    config: SkillGraphConfig,
     projectRoot: string
   ) {
     this.db = db;
@@ -166,7 +168,7 @@ export class CodeGraph {
     this.config = config;
     this.projectRoot = projectRoot;
     this.fileLock = new FileLock(
-      path.join(projectRoot, '.codegraph', 'codegraph.lock')
+      path.join(projectRoot, '.skillgraph', 'skillgraph.lock')
     );
     this.orchestrator = new ExtractionOrchestrator(projectRoot, config, queries);
     this.resolver = createResolver(projectRoot, queries);
@@ -194,21 +196,21 @@ export class CodeGraph {
   // ===========================================================================
 
   /**
-   * Initialize a new CodeGraph project
+   * Initialize a new SkillGraph project
    *
-   * Creates the .CodeGraph directory, database, and configuration.
+   * Creates the .skillgraph directory, database, and configuration.
    *
    * @param projectRoot - Path to the project root directory
    * @param options - Initialization options
-   * @returns A new CodeGraph instance
+   * @returns A new SkillGraph instance
    */
-  static async init(projectRoot: string, options: InitOptions = {}): Promise<CodeGraph> {
+  static async init(projectRoot: string, options: InitOptions = {}): Promise<SkillGraph> {
     await initGrammars();
     const resolvedRoot = path.resolve(projectRoot);
 
     // Check if already initialized
     if (isInitialized(resolvedRoot)) {
-      throw new Error(`CodeGraph already initialized in ${resolvedRoot}`);
+      throw new Error(`SkillGraph already initialized in ${resolvedRoot}`);
     }
 
     // Create directory structure
@@ -226,7 +228,7 @@ export class CodeGraph {
     const db = DatabaseConnection.initialize(dbPath);
     const queries = new QueryBuilder(db.getDb());
 
-    const instance = new CodeGraph(db, queries, config, resolvedRoot);
+    const instance = new SkillGraph(db, queries, config, resolvedRoot);
 
     // Run initial indexing if requested
     if (options.index) {
@@ -239,12 +241,12 @@ export class CodeGraph {
   /**
    * Initialize synchronously (without indexing)
    */
-  static initSync(projectRoot: string, options: Omit<InitOptions, 'index' | 'onProgress'> = {}): CodeGraph {
+  static initSync(projectRoot: string, options: Omit<InitOptions, 'index' | 'onProgress'> = {}): SkillGraph {
     const resolvedRoot = path.resolve(projectRoot);
 
     // Check if already initialized
     if (isInitialized(resolvedRoot)) {
-      throw new Error(`CodeGraph already initialized in ${resolvedRoot}`);
+      throw new Error(`SkillGraph already initialized in ${resolvedRoot}`);
     }
 
     // Create directory structure
@@ -262,29 +264,29 @@ export class CodeGraph {
     const db = DatabaseConnection.initialize(dbPath);
     const queries = new QueryBuilder(db.getDb());
 
-    return new CodeGraph(db, queries, config, resolvedRoot);
+    return new SkillGraph(db, queries, config, resolvedRoot);
   }
 
   /**
-   * Open an existing CodeGraph project
+   * Open an existing SkillGraph project
    *
    * @param projectRoot - Path to the project root directory
    * @param options - Open options
-   * @returns A CodeGraph instance
+   * @returns A SkillGraph instance
    */
-  static async open(projectRoot: string, options: OpenOptions = {}): Promise<CodeGraph> {
+  static async open(projectRoot: string, options: OpenOptions = {}): Promise<SkillGraph> {
     await initGrammars();
     const resolvedRoot = path.resolve(projectRoot);
 
     // Check if initialized
     if (!isInitialized(resolvedRoot)) {
-      throw new Error(`CodeGraph not initialized in ${resolvedRoot}. Run init() first.`);
+      throw new Error(`SkillGraph not initialized in ${resolvedRoot}. Run init() first.`);
     }
 
     // Validate directory structure
     const validation = validateDirectory(resolvedRoot);
     if (!validation.valid) {
-      throw new Error(`Invalid CodeGraph directory: ${validation.errors.join(', ')}`);
+      throw new Error(`Invalid SkillGraph directory: ${validation.errors.join(', ')}`);
     }
 
     // Load configuration
@@ -295,7 +297,7 @@ export class CodeGraph {
     const db = DatabaseConnection.open(dbPath);
     const queries = new QueryBuilder(db.getDb());
 
-    const instance = new CodeGraph(db, queries, config, resolvedRoot);
+    const instance = new SkillGraph(db, queries, config, resolvedRoot);
 
     // Sync if requested
     if (options.sync) {
@@ -308,18 +310,18 @@ export class CodeGraph {
   /**
    * Open synchronously (without sync)
    */
-  static openSync(projectRoot: string): CodeGraph {
+  static openSync(projectRoot: string): SkillGraph {
     const resolvedRoot = path.resolve(projectRoot);
 
     // Check if initialized
     if (!isInitialized(resolvedRoot)) {
-      throw new Error(`CodeGraph not initialized in ${resolvedRoot}. Run init() first.`);
+      throw new Error(`SkillGraph not initialized in ${resolvedRoot}. Run init() first.`);
     }
 
     // Validate directory structure
     const validation = validateDirectory(resolvedRoot);
     if (!validation.valid) {
-      throw new Error(`Invalid CodeGraph directory: ${validation.errors.join(', ')}`);
+      throw new Error(`Invalid SkillGraph directory: ${validation.errors.join(', ')}`);
     }
 
     // Load configuration
@@ -330,18 +332,18 @@ export class CodeGraph {
     const db = DatabaseConnection.open(dbPath);
     const queries = new QueryBuilder(db.getDb());
 
-    return new CodeGraph(db, queries, config, resolvedRoot);
+    return new SkillGraph(db, queries, config, resolvedRoot);
   }
 
   /**
-   * Check if a directory has been initialized as a CodeGraph project
+   * Check if a directory has been initialized as a SkillGraph project
    */
   static isInitialized(projectRoot: string): boolean {
     return isInitialized(path.resolve(projectRoot));
   }
 
   /**
-   * Close the CodeGraph instance and release resources
+   * Close the SkillGraph instance and release resources
    */
   close(): void {
     this.unwatch();
@@ -357,14 +359,14 @@ export class CodeGraph {
   /**
    * Get the current configuration
    */
-  getConfig(): CodeGraphConfig {
+  getConfig(): SkillGraphConfig {
     return { ...this.config };
   }
 
   /**
    * Update configuration
    */
-  updateConfig(updates: Partial<CodeGraphConfig>): void {
+  updateConfig(updates: Partial<SkillGraphConfig>): void {
     Object.assign(this.config, updates);
     saveConfig(this.projectRoot, this.config);
     // Recreate orchestrator and resolver with new config
@@ -667,8 +669,8 @@ export class CodeGraph {
   /**
    * Active SQLite backend for this project's connection. `wasm` means
    * the native better-sqlite3 install failed and the WASM fallback is
-   * serving requests at 5-10x the latency. Surfaced via `codegraph
-   * status` and the `codegraph_status` MCP tool.
+   * serving requests at 5-10x the latency. Surfaced via `skillgraph
+   * status` and the `skillgraph_status` MCP tool.
    */
   getBackend(): import('./db').SqliteBackend {
     return this.db.getBackend();
@@ -994,6 +996,17 @@ export class CodeGraph {
     return this.contextBuilder.buildContext(input, options);
   }
 
+  async searchSemanticCode(
+    query: string,
+    options: { intent?: RetrievalIntent; limit?: number } = {}
+  ): Promise<RerankResult[]> {
+    return this.contextBuilder.searchSemanticCode(
+      query,
+      options.intent ?? 'mixed',
+      options.limit ?? 10
+    );
+  }
+
   // ===========================================================================
   // Database Management
   // ===========================================================================
@@ -1021,10 +1034,10 @@ export class CodeGraph {
   }
 
   /**
-   * Completely remove CodeGraph from the project.
-   * This closes the database and deletes the .CodeGraph directory.
+   * Completely remove SkillGraph from the project.
+   * This closes the database and deletes the .skillgraph directory.
    *
-   * WARNING: This permanently deletes all CodeGraph data for the project.
+   * WARNING: This permanently deletes all SkillGraph data for the project.
    */
   uninitialize(): void {
     this.close();
@@ -1033,4 +1046,4 @@ export class CodeGraph {
 }
 
 // Default export
-export default CodeGraph;
+export default SkillGraph;

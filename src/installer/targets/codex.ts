@@ -2,7 +2,7 @@
  * OpenAI Codex CLI target.
  *
  *   - MCP server entry to `~/.codex/config.toml` as the dotted-key
- *     table `[mcp_servers.codegraph]`. TOML — not JSON — handled by
+ *     table `[mcp_servers.skillgraph]`. TOML — not JSON — handled by
  *     the narrow serializer in `./toml.ts`.
  *   - Instructions to `~/.codex/AGENTS.md`.
  *
@@ -31,13 +31,13 @@ import {
   replaceOrAppendMarkedSection,
 } from './shared';
 import {
-  CODEGRAPH_SECTION_END,
-  CODEGRAPH_SECTION_START,
+  SKILLGRAPH_SECTION_END,
+  SKILLGRAPH_SECTION_START,
   INSTRUCTIONS_TEMPLATE,
 } from '../instructions-template';
 import { buildTomlTable, removeTomlTable, upsertTomlTable } from './toml';
 
-const TOML_HEADER = 'mcp_servers.codegraph';
+const TOML_HEADER = 'mcp_servers.skillgraph';
 
 function configDir(): string {
   return path.join(os.homedir(), '.codex');
@@ -112,7 +112,7 @@ class CodexTarget implements AgentTarget {
     }
 
     const instr = instructionsPath();
-    const instrAction = removeMarkedSection(instr, CODEGRAPH_SECTION_START, CODEGRAPH_SECTION_END);
+    const instrAction = removeMarkedSection(instr, SKILLGRAPH_SECTION_START, SKILLGRAPH_SECTION_END);
     files.push({ path: instr, action: instrAction });
 
     return { files };
@@ -168,8 +168,8 @@ function writeInstructionsEntry(): WriteResult['files'][number] {
   const action = replaceOrAppendMarkedSection(
     file,
     INSTRUCTIONS_TEMPLATE,
-    CODEGRAPH_SECTION_START,
-    CODEGRAPH_SECTION_END,
+    SKILLGRAPH_SECTION_START,
+    SKILLGRAPH_SECTION_END,
   );
   const mapped: 'created' | 'updated' | 'unchanged' =
     action === 'created' ? 'created'

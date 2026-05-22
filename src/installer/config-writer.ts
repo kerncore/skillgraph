@@ -50,7 +50,7 @@ export function hasMcpConfig(location: InstallLocation): boolean {
     ? path.join(os.homedir(), '.claude.json')
     : path.join(process.cwd(), '.claude.json');
   const config = readJsonFile(file);
-  return !!config.mcpServers?.codegraph;
+  return !!config.mcpServers?.skillgraph;
 }
 
 export function hasPermissions(location: InstallLocation): boolean {
@@ -60,7 +60,7 @@ export function hasPermissions(location: InstallLocation): boolean {
   const settings = readJsonFile(file);
   const allow = settings.permissions?.allow;
   if (!Array.isArray(allow)) return false;
-  return allow.some((p: string) => p.startsWith('mcp__codegraph__'));
+  return allow.some((p: string) => p.startsWith('mcp__skillgraph__'));
 }
 
 export function hasClaudeMdSection(location: InstallLocation): boolean {
@@ -70,7 +70,7 @@ export function hasClaudeMdSection(location: InstallLocation): boolean {
   try {
     if (!fs.existsSync(file)) return false;
     const content = fs.readFileSync(file, 'utf-8');
-    return content.includes('<!-- CODEGRAPH_START -->') || content.includes('## CodeGraph');
+    return content.includes('<!-- SKILLGRAPH_START -->') || content.includes('## SkillGraph');
   } catch {
     return false;
   }

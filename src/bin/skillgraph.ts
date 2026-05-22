@@ -1,42 +1,42 @@
 #!/usr/bin/env node
 /**
- * CodeGraph CLI
+ * SkillGraph CLI
  *
- * Command-line interface for CodeGraph code intelligence.
+ * Command-line interface for SkillGraph code intelligence.
  *
  * Usage:
- *   codegraph                    Run interactive installer (when no args)
- *   codegraph install            Run interactive installer
- *   codegraph init [path]        Initialize CodeGraph in a project
- *   codegraph uninit [path]      Remove CodeGraph from a project
- *   codegraph index [path]       Index all files in the project
- *   codegraph sync [path]        Sync changes since last index
- *   codegraph status [path]      Show index status
- *   codegraph query <search>     Search for symbols
- *   codegraph files [options]    Show project file structure
- *   codegraph context <task>     Build context for a task
- *   codegraph affected [files]   Find test files affected by changes
+ *   skillgraph                    Run interactive installer (when no args)
+ *   skillgraph install            Run interactive installer
+ *   skillgraph init [path]        Initialize SkillGraph in a project
+ *   skillgraph uninit [path]      Remove SkillGraph from a project
+ *   skillgraph index [path]       Index all files in the project
+ *   skillgraph sync [path]        Sync changes since last index
+ *   skillgraph status [path]      Show index status
+ *   skillgraph query <search>     Search for symbols
+ *   skillgraph files [options]    Show project file structure
+ *   skillgraph context <task>     Build context for a task
+ *   skillgraph affected [files]   Find test files affected by changes
  */
 
 import { Command } from 'commander';
 import * as path from 'path';
 import * as fs from 'fs';
-import { getCodeGraphDir, isInitialized } from '../directory';
+import { getSkillGraphDir, isInitialized } from '../directory';
 import { createShimmerProgress } from '../ui/shimmer-progress';
 import { getGlyphs } from '../ui/glyphs';
 
 import { buildNode25BlockBanner } from './node-version-check';
 
-// Lazy-load heavy modules (CodeGraph, runInstaller) to keep CLI startup fast.
-async function loadCodeGraph(): Promise<typeof import('../index')> {
+// Lazy-load heavy modules (SkillGraph, runInstaller) to keep CLI startup fast.
+async function loadSkillGraph(): Promise<typeof import('../index')> {
   try {
     return await import('../index');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`\x1b[31m${getGlyphs().err}\x1b[0m Failed to load CodeGraph modules.`);
+    console.error(`\x1b[31m${getGlyphs().err}\x1b[0m Failed to load SkillGraph modules.`);
     console.error(`\n  Node: ${process.version}  Platform: ${process.platform} ${process.arch}`);
     console.error(`\n  Error: ${msg}`);
-    console.error('\n  Try reinstalling with: npm install -g @colbymchenry/codegraph\n');
+    console.error('\n  Try reinstalling with: npm install -g @colbymchenry/skillgraph\n');
     process.exit(1);
   }
 }
@@ -47,7 +47,7 @@ async function loadCodeGraph(): Promise<typeof import('../index')> {
 const importESM = new Function('specifier', 'return import(specifier)') as
   (specifier: string) => Promise<typeof import('@clack/prompts')>;
 
-// Block CodeGraph on Node.js 25.x — V8's turboshaft WASM JIT has a Zone
+// Block SkillGraph on Node.js 25.x — V8's turboshaft WASM JIT has a Zone
 // allocator bug that reliably crashes when compiling tree-sitter
 // grammars (see #54, #81, #140). The previous behaviour was a soft
 // console.warn that scrolls off-screen before the OOM crash 30 seconds
@@ -58,7 +58,7 @@ const nodeVersion = process.versions.node;
 const nodeMajor = parseInt(nodeVersion.split('.')[0] ?? '0', 10);
 if (nodeMajor >= 25) {
   process.stderr.write(buildNode25BlockBanner(nodeVersion) + '\n');
-  if (!process.env.CODEGRAPH_ALLOW_UNSAFE_NODE) {
+  if (!process.env.SKILLGRAPH_ALLOW_UNSAFE_NODE) {
     process.exit(1);
   }
   // Override active — banner shown for visibility, continuing.
@@ -78,11 +78,11 @@ if (process.argv.length === 2) {
 }
 
 process.on('uncaughtException', (error) => {
-  console.error('[CodeGraph] Uncaught exception:', error);
+  console.error('[SkillGraph] Uncaught exception:', error);
 });
 
 process.on('unhandledRejection', (reason) => {
-  console.error('[CodeGraph] Unhandled rejection:', reason);
+  console.error('[SkillGraph] Unhandled rejection:', reason);
 });
 
 function main() {
@@ -124,7 +124,7 @@ const chalk = {
 };
 
 program
-  .name('codegraph')
+  .name('skillgraph')
   .description('Code intelligence and knowledge graph for any codebase')
   .version(packageJson.version);
 
@@ -134,19 +134,19 @@ program
 
 /**
  * Resolve project path from argument or current directory
- * Walks up parent directories to find nearest initialized CodeGraph project
- * (must have .codegraph/codegraph.db, not just .codegraph/lessons.db)
+ * Walks up parent directories to find nearest initialized SkillGraph project
+ * (must have .skillgraph/skillgraph.db, not just .skillgraph/lessons.db)
  */
 function resolveProjectPath(pathArg?: string): string {
   const absolutePath = path.resolve(pathArg || process.cwd());
 
-  // If exact path is initialized (has codegraph.db), use it
+  // If exact path is initialized (has skillgraph.db), use it
   if (isInitialized(absolutePath)) {
     return absolutePath;
   }
 
-  // Walk up to find nearest parent with CodeGraph initialized
-  // Note: findNearestCodeGraphRoot finds any .codegraph folder, but we need one with codegraph.db
+  // Walk up to find nearest parent with SkillGraph initialized
+  // Note: findNearestSkillGraphRoot finds any .skillgraph folder, but we need one with skillgraph.db
   let current = absolutePath;
   const root = path.parse(current).root;
 
@@ -324,14 +324,14 @@ function printIndexResult(clack: typeof import('@clack/prompts'), result: IndexR
 
     if (projectPath) {
       writeErrorLog(projectPath, result.errors);
-      clack.log.info('See .codegraph/errors.log for details');
+      clack.log.info('See .skillgraph/errors.log for details');
     }
 
     if (result.filesIndexed > 0) {
       clack.log.info(`The index is fully usable ${getGlyphs().dash} only the failed files are missing.`);
     }
   } else if (projectPath) {
-    const logPath = path.join(projectPath, '.codegraph', 'errors.log');
+    const logPath = path.join(projectPath, '.skillgraph', 'errors.log');
     if (fs.existsSync(logPath)) {
       fs.unlinkSync(logPath);
     }
@@ -339,10 +339,10 @@ function printIndexResult(clack: typeof import('@clack/prompts'), result: IndexR
 }
 
 /**
- * Write detailed error log to .codegraph/errors.log
+ * Write detailed error log to .skillgraph/errors.log
  */
 function writeErrorLog(projectPath: string, errors: Array<{ message: string; filePath?: string; severity: string; code?: string }>): void {
-  const cgDir = path.join(projectPath, '.codegraph');
+  const cgDir = path.join(projectPath, '.skillgraph');
   if (!fs.existsSync(cgDir)) return;
 
   const logPath = path.join(cgDir, 'errors.log');
@@ -366,7 +366,7 @@ function writeErrorLog(projectPath: string, errors: Array<{ message: string; fil
   }
 
   const lines: string[] = [
-    `CodeGraph Error Log - ${new Date().toISOString()}`,
+    `SkillGraph Error Log - ${new Date().toISOString()}`,
     `${errorsByFile.size} files with errors`,
     '',
   ];
@@ -389,23 +389,23 @@ function writeErrorLog(projectPath: string, errors: Array<{ message: string; fil
 // =============================================================================
 
 /**
- * codegraph init [path]
+ * skillgraph init [path]
  */
 program
   .command('init [path]')
-  .description('Initialize CodeGraph in a project directory')
+  .description('Initialize SkillGraph in a project directory')
   .option('-i, --index', 'Run initial indexing after initialization')
   .option('-v, --verbose', 'Show detailed worker lifecycle and memory info')
   .action(async (pathArg: string | undefined, options: { index?: boolean; verbose?: boolean }) => {
     const projectPath = path.resolve(pathArg || process.cwd());
     const clack = await importESM('@clack/prompts');
 
-    clack.intro('Initializing CodeGraph');
+    clack.intro('Initializing SkillGraph');
 
     try {
       if (isInitialized(projectPath)) {
         clack.log.warn(`Already initialized in ${projectPath}`);
-        clack.log.info('Use "codegraph index" to re-index or "codegraph sync" to update');
+        clack.log.info('Use "skillgraph index" to re-index or "skillgraph sync" to update');
         // Re-run agent surface wiring so re-running `init` is the
         // documented way to recover a project that's missing its
         // Cursor rules file (or future per-agent project surfaces).
@@ -419,13 +419,13 @@ program
         return;
       }
 
-      const { default: CodeGraph } = await loadCodeGraph();
-      const cg = await CodeGraph.init(projectPath, { index: false });
+      const { default: SkillGraph } = await loadSkillGraph();
+      const cg = await SkillGraph.init(projectPath, { index: false });
       clack.log.success(`Initialized in ${projectPath}`);
 
       // Bootstrap project-local surfaces for any agent that's
-      // configured globally (Cursor needs ./.cursor/rules/codegraph.mdc
-      // to actually prefer codegraph over native grep). Silent when
+      // configured globally (Cursor needs ./.cursor/rules/skillgraph.mdc
+      // to actually prefer skillgraph over native grep). Silent when
       // there's nothing to write.
       try {
         const { wireProjectSurfacesForGlobalAgents } = await import('../installer');
@@ -456,7 +456,7 @@ program
 
         printIndexResult(clack, result, projectPath);
       } else {
-        clack.log.info('Run "codegraph index" to index the project');
+        clack.log.info('Run "skillgraph index" to index the project');
       }
 
       clack.outro('Done');
@@ -468,18 +468,18 @@ program
   });
 
 /**
- * codegraph uninit [path]
+ * skillgraph uninit [path]
  */
 program
   .command('uninit [path]')
-  .description('Remove CodeGraph from a project (deletes .codegraph/ directory)')
+  .description('Remove SkillGraph from a project (deletes .skillgraph/ directory)')
   .option('-f, --force', 'Skip confirmation prompt')
   .action(async (pathArg: string | undefined, options: { force?: boolean }) => {
     const projectPath = resolveProjectPath(pathArg);
 
     try {
       if (!isInitialized(projectPath)) {
-        warn(`CodeGraph is not initialized in ${projectPath}`);
+        warn(`SkillGraph is not initialized in ${projectPath}`);
         return;
       }
 
@@ -489,7 +489,7 @@ program
         const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
         const answer = await new Promise<string>((resolve) => {
           rl.question(
-            chalk.yellow(`${getGlyphs().warn} This will permanently delete all CodeGraph data. Continue? (y/N) `),
+            chalk.yellow(`${getGlyphs().warn} This will permanently delete all SkillGraph data. Continue? (y/N) `),
             resolve
           );
         });
@@ -501,11 +501,11 @@ program
         }
       }
 
-      const { default: CodeGraph } = await loadCodeGraph();
-      const cg = CodeGraph.openSync(projectPath);
+      const { default: SkillGraph } = await loadSkillGraph();
+      const cg = SkillGraph.openSync(projectPath);
       cg.uninitialize();
 
-      success(`Removed CodeGraph from ${projectPath}`);
+      success(`Removed SkillGraph from ${projectPath}`);
     } catch (err) {
       error(`Failed to uninitialize: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
@@ -513,7 +513,7 @@ program
   });
 
 /**
- * codegraph index [path]
+ * skillgraph index [path]
  */
 program
   .command('index [path]')
@@ -526,13 +526,13 @@ program
 
     try {
       if (!isInitialized(projectPath)) {
-        error(`CodeGraph not initialized in ${projectPath}`);
-        info('Run "codegraph init" first');
+        error(`SkillGraph not initialized in ${projectPath}`);
+        info('Run "skillgraph init" first');
         process.exit(1);
       }
 
-      const { default: CodeGraph } = await loadCodeGraph();
-      const cg = await CodeGraph.open(projectPath);
+      const { default: SkillGraph } = await loadSkillGraph();
+      const cg = await SkillGraph.open(projectPath);
 
       if (options.quiet) {
         // Quiet mode: no UI, just run
@@ -582,7 +582,7 @@ program
   });
 
 /**
- * codegraph sync [path]
+ * skillgraph sync [path]
  */
 program
   .command('sync [path]')
@@ -594,13 +594,13 @@ program
     try {
       if (!isInitialized(projectPath)) {
         if (!options.quiet) {
-          error(`CodeGraph not initialized in ${projectPath}`);
+          error(`SkillGraph not initialized in ${projectPath}`);
         }
         process.exit(1);
       }
 
-      const { default: CodeGraph } = await loadCodeGraph();
-      const cg = await CodeGraph.open(projectPath);
+      const { default: SkillGraph } = await loadSkillGraph();
+      const cg = await SkillGraph.open(projectPath);
 
       if (options.quiet) {
         await cg.sync();
@@ -609,7 +609,7 @@ program
       }
 
       const clack = await importESM('@clack/prompts');
-      clack.intro('Syncing CodeGraph');
+      clack.intro('Syncing SkillGraph');
 
       process.stdout.write(`${colors.dim}${getGlyphs().rail}${colors.reset}\n`);
       const progress = createShimmerProgress();
@@ -644,7 +644,7 @@ program
   });
 
 /**
- * codegraph status [path]
+ * skillgraph status [path]
  */
 program
   .command('status [path]')
@@ -659,15 +659,15 @@ program
           console.log(JSON.stringify({ initialized: false, projectPath }));
           return;
         }
-        console.log(chalk.bold('\nCodeGraph Status\n'));
+        console.log(chalk.bold('\nSkillGraph Status\n'));
         info(`Project: ${projectPath}`);
         warn('Not initialized');
-        info('Run "codegraph init" to initialize');
+        info('Run "skillgraph init" to initialize');
         return;
       }
 
-      const { default: CodeGraph } = await loadCodeGraph();
-      const cg = await CodeGraph.open(projectPath);
+      const { default: SkillGraph } = await loadSkillGraph();
+      const cg = await SkillGraph.open(projectPath);
       const stats = cg.getStats();
       const changes = cg.getChangedFiles();
       const backend = cg.getBackend();
@@ -694,7 +694,7 @@ program
         return;
       }
 
-      console.log(chalk.bold('\nCodeGraph Status\n'));
+      console.log(chalk.bold('\nSkillGraph Status\n'));
 
       // Project info
       console.log(chalk.cyan('Project:'), projectPath);
@@ -749,7 +749,7 @@ program
         if (changes.removed.length > 0) {
           console.log(`  Removed:   ${changes.removed.length} files`);
         }
-        info('Run "codegraph sync" to update the index');
+        info('Run "skillgraph sync" to update the index');
       } else {
         success('Index is up to date');
       }
@@ -763,7 +763,7 @@ program
   });
 
 /**
- * codegraph query <search>
+ * skillgraph query <search>
  */
 program
   .command('query <search>')
@@ -777,12 +777,12 @@ program
 
     try {
       if (!isInitialized(projectPath)) {
-        error(`CodeGraph not initialized in ${projectPath}`);
+        error(`SkillGraph not initialized in ${projectPath}`);
         process.exit(1);
       }
 
-      const { default: CodeGraph } = await loadCodeGraph();
-      const cg = await CodeGraph.open(projectPath);
+      const { default: SkillGraph } = await loadSkillGraph();
+      const cg = await SkillGraph.open(projectPath);
 
       const limit = parseInt(options.limit || '10', 10);
       const results = cg.searchNodes(search, {
@@ -825,7 +825,7 @@ program
   });
 
 /**
- * codegraph files [path]
+ * skillgraph files [path]
  */
 program
   .command('files')
@@ -850,16 +850,16 @@ program
 
     try {
       if (!isInitialized(projectPath)) {
-        error(`CodeGraph not initialized in ${projectPath}`);
+        error(`SkillGraph not initialized in ${projectPath}`);
         process.exit(1);
       }
 
-      const { default: CodeGraph } = await loadCodeGraph();
-      const cg = await CodeGraph.open(projectPath);
+      const { default: SkillGraph } = await loadSkillGraph();
+      const cg = await SkillGraph.open(projectPath);
       let files = cg.getFiles();
 
       if (files.length === 0) {
-        info('No files indexed. Run "codegraph index" first.');
+        info('No files indexed. Run "skillgraph index" first.');
         cg.destroy();
         return;
       }
@@ -1032,7 +1032,7 @@ function printFileTree(
 }
 
 /**
- * codegraph context <task>
+ * skillgraph context <task>
  */
 program
   .command('context <task>')
@@ -1053,12 +1053,12 @@ program
 
     try {
       if (!isInitialized(projectPath)) {
-        error(`CodeGraph not initialized in ${projectPath}`);
+        error(`SkillGraph not initialized in ${projectPath}`);
         process.exit(1);
       }
 
-      const { default: CodeGraph } = await loadCodeGraph();
-      const cg = await CodeGraph.open(projectPath);
+      const { default: SkillGraph } = await loadSkillGraph();
+      const cg = await SkillGraph.open(projectPath);
 
       const context = await cg.buildContext(task, {
         maxNodes: parseInt(options.maxNodes || '50', 10),
@@ -1078,11 +1078,11 @@ program
   });
 
 /**
- * codegraph serve
+ * skillgraph serve
  */
 program
   .command('serve')
-  .description('Start CodeGraph as an MCP server for AI assistants')
+  .description('Start SkillGraph as an MCP server for AI assistants')
   .option('-p, --path <path>', 'Project path (optional for MCP mode, uses rootUri from client)')
   .option('--mcp', 'Run as MCP server (stdio transport)')
   .action(async (options: { path?: string; mcp?: boolean }) => {
@@ -1098,28 +1098,28 @@ program
       } else {
         // Default: show info about MCP mode.
         // Use stderr so stdout stays clean for any piped/stdio usage.
-        console.error(chalk.bold('\nCodeGraph MCP Server\n'));
+        console.error(chalk.bold('\nSkillGraph MCP Server\n'));
         console.error(chalk.blue(getGlyphs().info) + ' Use --mcp flag to start the MCP server');
         console.error('\nTo use with Claude Code, add to your MCP configuration:');
         console.error(chalk.dim(`
 {
   "mcpServers": {
-    "codegraph": {
-      "command": "codegraph",
+    "skillgraph": {
+      "command": "skillgraph",
       "args": ["serve", "--mcp"]
     }
   }
 }
 `));
         console.error('Available tools:');
-        console.error(chalk.cyan('  codegraph_search') + '    - Search for code symbols');
-        console.error(chalk.cyan('  codegraph_context') + '   - Build context for a task');
-        console.error(chalk.cyan('  codegraph_callers') + '   - Find callers of a symbol');
-        console.error(chalk.cyan('  codegraph_callees') + '   - Find what a symbol calls');
-        console.error(chalk.cyan('  codegraph_impact') + '    - Analyze impact of changes');
-        console.error(chalk.cyan('  codegraph_node') + '      - Get symbol details');
-        console.error(chalk.cyan('  codegraph_files') + '     - Get project file structure');
-        console.error(chalk.cyan('  codegraph_status') + '    - Get index status');
+        console.error(chalk.cyan('  skillgraph_search') + '    - Search for code symbols');
+        console.error(chalk.cyan('  skillgraph_context') + '   - Build context for a task');
+        console.error(chalk.cyan('  skillgraph_callers') + '   - Find callers of a symbol');
+        console.error(chalk.cyan('  skillgraph_callees') + '   - Find what a symbol calls');
+        console.error(chalk.cyan('  skillgraph_impact') + '    - Analyze impact of changes');
+        console.error(chalk.cyan('  skillgraph_node') + '      - Get symbol details');
+        console.error(chalk.cyan('  skillgraph_files') + '     - Get project file structure');
+        console.error(chalk.cyan('  skillgraph_status') + '    - Get index status');
       }
     } catch (err) {
       error(`Failed to start server: ${err instanceof Error ? err.message : String(err)}`);
@@ -1128,7 +1128,7 @@ program
   });
 
 /**
- * codegraph unlock [path]
+ * skillgraph unlock [path]
  */
 program
   .command('unlock [path]')
@@ -1138,11 +1138,11 @@ program
 
     try {
       if (!isInitialized(projectPath)) {
-        error(`CodeGraph not initialized in ${projectPath}`);
+        error(`SkillGraph not initialized in ${projectPath}`);
         return;
       }
 
-      const lockPath = path.join(getCodeGraphDir(projectPath), 'codegraph.lock');
+      const lockPath = path.join(getSkillGraphDir(projectPath), 'skillgraph.lock');
 
       if (!fs.existsSync(lockPath)) {
         info(`No lock file found ${getGlyphs().dash} nothing to do`);
@@ -1158,14 +1158,14 @@ program
   });
 
 /**
- * codegraph affected [files...]
+ * skillgraph affected [files...]
  *
  * Find test files affected by the given source files.
  * Traces dependency edges transitively to find test files that depend on changed code.
  *
  * Usage:
- *   git diff --name-only | codegraph affected --stdin
- *   codegraph affected src/lib/components/Editor.svelte src/routes/+page.svelte
+ *   git diff --name-only | skillgraph affected --stdin
+ *   skillgraph affected src/lib/components/Editor.svelte src/routes/+page.svelte
  */
 program
   .command('affected [files...]')
@@ -1181,7 +1181,7 @@ program
 
     try {
       if (!isInitialized(projectPath)) {
-        error(`CodeGraph not initialized in ${projectPath}`);
+        error(`SkillGraph not initialized in ${projectPath}`);
         process.exit(1);
       }
 
@@ -1199,8 +1199,8 @@ program
         process.exit(0);
       }
 
-      const { default: CodeGraph } = await loadCodeGraph();
-      const cg = await CodeGraph.open(projectPath);
+      const { default: SkillGraph } = await loadSkillGraph();
+      const cg = await SkillGraph.open(projectPath);
       const maxDepth = parseInt(options.depth || '5', 10);
 
       // Common test file patterns
@@ -1296,11 +1296,11 @@ program
   });
 
 /**
- * codegraph install
+ * skillgraph install
  */
 program
   .command('install')
-  .description('Install codegraph MCP server into one or more agents (Claude Code, Cursor, Codex CLI, opencode)')
+  .description('Install skillgraph MCP server into one or more agents (Claude Code, Cursor, Codex CLI, opencode)')
   .option('-t, --target <ids>', 'Target agent(s): comma-separated ids, or "auto"|"all"|"none". Default: prompt')
   .option('-l, --location <where>', 'Install location: "global" or "local". Default: prompt')
   .option('-y, --yes', 'Non-interactive: defaults to --location=global --target=auto, auto-allow on')

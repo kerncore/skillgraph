@@ -1,5 +1,5 @@
 /**
- * CodeGraph Type Definitions
+ * SkillGraph Type Definitions
  *
  * Core types for the semantic knowledge graph system.
  */
@@ -448,9 +448,9 @@ export interface FrameworkHint {
 }
 
 /**
- * Configuration for a CodeGraph project
+ * Configuration for a SkillGraph project
  */
-export interface CodeGraphConfig {
+export interface SkillGraphConfig {
   /** Schema version for migrations */
   version: number;
 
@@ -562,7 +562,7 @@ export interface RerankResult {
 /**
  * Default configuration values
  */
-export const DEFAULT_CONFIG: CodeGraphConfig = {
+export const DEFAULT_CONFIG: SkillGraphConfig = {
   version: 1,
   rootDir: '.',
   include: [

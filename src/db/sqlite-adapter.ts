@@ -44,7 +44,7 @@ export function buildWasmFallbackBanner(nativeError?: string): string {
   const sep = '─'.repeat(72);
   const lines = [
     sep,
-    '[CodeGraph] WASM SQLite fallback active (better-sqlite3 unavailable)',
+    '[SkillGraph] WASM SQLite fallback active (better-sqlite3 unavailable)',
     sep,
     'Indexing and sync will be 5-10x slower than the native backend.',
     '',
@@ -60,7 +60,7 @@ export function buildWasmFallbackBanner(nativeError?: string): string {
     'Or force-include as a hard dependency on any platform:',
     '  npm install better-sqlite3 --save',
     '',
-    'Verify after fix: `codegraph status` should show `Backend: native`.',
+    'Verify after fix: `skillgraph status` should show `Backend: native`.',
   ];
   if (nativeError) {
     lines.push('', `Native load error: ${nativeError}`);
@@ -233,7 +233,7 @@ class WasmDatabaseAdapter implements SqliteDatabase {
  * falls back to node-sqlite3-wasm. Returns the active backend
  * alongside the db so each `DatabaseConnection` can report its own
  * backend per-instance — MCP can open multiple project DBs in one
- * process (`tools.ts` getCodeGraph cache), so a process-global would
+ * process (`tools.ts` getSkillGraph cache), so a process-global would
  * race / overwrite.
  */
 export function createDatabase(dbPath: string): { db: SqliteDatabase; backend: SqliteBackend } {

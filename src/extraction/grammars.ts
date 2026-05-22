@@ -133,7 +133,7 @@ export async function loadGrammarsForLanguages(languages: Language[]): Promise<v
       languageCache.set(lang, language);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[CodeGraph] Failed to load ${lang} grammar — parsing will be unavailable: ${message}`);
+      console.warn(`[SkillGraph] Failed to load ${lang} grammar — parsing will be unavailable: ${message}`);
       unavailableGrammarErrors.set(lang, message);
     }
   }

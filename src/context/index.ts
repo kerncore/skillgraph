@@ -962,6 +962,18 @@ export class ContextBuilder {
     intent: RetrievalIntent,
     limit: number
   ): Promise<SearchResult[]> {
+    const ranked = await this.searchSemanticCode(query, intent, limit);
+    return ranked.map((result) => ({
+      node: result.node!,
+      score: 100 + result.score,
+    }));
+  }
+
+  async searchSemanticCode(
+    query: string,
+    intent: RetrievalIntent,
+    limit: number
+  ): Promise<RerankResult[]> {
     if (!this.qwenConfig?.enabled || !this.embeddingProvider) return [];
 
     const queryEmbedding = await this.embeddingProvider.embedQuery(query, intent);
@@ -996,11 +1008,7 @@ export class ContextBuilder {
 
     ranked.sort((a, b) => b.score - a.score);
     this.lastRerankedResults = ranked.slice(0, 2);
-
-    return ranked.slice(0, limit).map((result) => ({
-      node: result.node!,
-      score: 100 + result.score,
-    }));
+    return ranked.slice(0, limit);
   }
 
   /**

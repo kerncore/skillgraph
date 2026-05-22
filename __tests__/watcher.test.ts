@@ -9,8 +9,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { FileWatcher } from '../src/sync/watcher';
-import type { CodeGraphConfig } from '../src/types';
-import CodeGraph from '../src/index';
+import type { SkillGraphConfig } from '../src/types';
+import SkillGraph from '../src/index';
 
 /**
  * Helper to wait for a condition with timeout
@@ -34,7 +34,7 @@ function waitFor(
 describe('FileWatcher', () => {
   let testDir: string;
 
-  const baseConfig: CodeGraphConfig = {
+  const baseConfig: SkillGraphConfig = {
     version: 1,
     rootDir: '.',
     include: ['**/*.ts', '**/*.js'],
@@ -47,7 +47,7 @@ describe('FileWatcher', () => {
   };
 
   beforeEach(() => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-watcher-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skillgraph-watcher-'));
     // Create a source file so the directory isn't empty
     const srcDir = path.join(testDir, 'src');
     fs.mkdirSync(srcDir);
@@ -101,6 +101,8 @@ describe('FileWatcher', () => {
       const watcher = new FileWatcher(testDir, baseConfig, syncFn, { debounceMs: 200 });
 
       watcher.start();
+      // Give fs.watch a brief moment to subscribe before the first write.
+      await new Promise((r) => setTimeout(r, 100));
 
       // Create a new file
       fs.writeFileSync(path.join(testDir, 'src', 'new.ts'), 'export const y = 2;');
@@ -158,7 +160,7 @@ describe('FileWatcher', () => {
       watcher.stop();
     });
 
-    it('should ignore .codegraph directory changes', async () => {
+    it('should ignore .skillgraph directory changes', async () => {
       const syncFn = vi.fn().mockResolvedValue({ filesChanged: 0, durationMs: 0 });
       const watcher = new FileWatcher(testDir, baseConfig, syncFn, { debounceMs: 200 });
 
@@ -168,8 +170,8 @@ describe('FileWatcher', () => {
       await new Promise((r) => setTimeout(r, 400));
       syncFn.mockClear();
 
-      // Simulate a .codegraph directory change
-      const cgDir = path.join(testDir, '.codegraph');
+      // Simulate a .skillgraph directory change
+      const cgDir = path.join(testDir, '.skillgraph');
       fs.mkdirSync(cgDir, { recursive: true });
       fs.writeFileSync(path.join(cgDir, 'db.sqlite'), 'fake');
 
@@ -191,6 +193,7 @@ describe('FileWatcher', () => {
       });
 
       watcher.start();
+      await new Promise((r) => setTimeout(r, 100));
 
       fs.writeFileSync(path.join(testDir, 'src', 'test.ts'), 'export const z = 3;');
 
@@ -209,6 +212,7 @@ describe('FileWatcher', () => {
       });
 
       watcher.start();
+      await new Promise((r) => setTimeout(r, 100));
 
       fs.writeFileSync(path.join(testDir, 'src', 'test.ts'), 'export const z = 3;');
 
@@ -220,15 +224,15 @@ describe('FileWatcher', () => {
     });
   });
 
-  describe('CodeGraph integration', () => {
-    let cg: CodeGraph;
+  describe('SkillGraph integration', () => {
+    let cg: SkillGraph;
 
     afterEach(() => {
       if (cg) cg.close();
     });
 
-    it('should watch and unwatch via CodeGraph API', async () => {
-      cg = CodeGraph.initSync(testDir, {
+    it('should watch and unwatch via SkillGraph API', async () => {
+      cg = SkillGraph.initSync(testDir, {
         config: { include: ['**/*.ts'], exclude: [] },
       });
       await cg.indexAll();
@@ -244,7 +248,7 @@ describe('FileWatcher', () => {
     });
 
     it('should stop watching on close', async () => {
-      cg = CodeGraph.initSync(testDir, {
+      cg = SkillGraph.initSync(testDir, {
         config: { include: ['**/*.ts'], exclude: [] },
       });
       await cg.indexAll();
@@ -259,7 +263,7 @@ describe('FileWatcher', () => {
     });
 
     it('should auto-sync when files change while watching', async () => {
-      cg = CodeGraph.initSync(testDir, {
+      cg = SkillGraph.initSync(testDir, {
         config: { include: ['**/*.ts'], exclude: [] },
       });
       await cg.indexAll();
