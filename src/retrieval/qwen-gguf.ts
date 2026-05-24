@@ -30,7 +30,8 @@ type LlamaModule = {
 
 async function loadNodeLlamaCpp(): Promise<LlamaModule> {
   try {
-    return await import('node-llama-cpp') as LlamaModule;
+    const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<LlamaModule>;
+    return await dynamicImport('node-llama-cpp');
   } catch (error) {
     throw new Error(
       `node-llama-cpp is required for Qwen GGUF retrieval. Install optional dependencies and configure qwen model paths. ${error instanceof Error ? error.message : String(error)}`

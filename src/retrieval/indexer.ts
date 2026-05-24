@@ -180,29 +180,33 @@ export class RetrievalIndexer {
   }
 
   async index(provider: EmbeddingProvider): Promise<{ documents: number; embedded: number }> {
-    const documents = this.buildDocuments(provider.modelId, provider.dimension);
+    const documents = this.buildDocuments(provider.modelId, provider.dimension)
+      .sort((a, b) => {
+        if (a.scope === b.scope) return a.id.localeCompare(b.id);
+        return a.scope === 'usage' ? -1 : 1;
+      });
     let embedded = 0;
-    const prepared: EmbeddingDocument[] = [];
+    const keepIds = new Set(documents.map((document) => document.id));
+
+    this.queries.deleteEmbeddingDocumentsExcept(
+      provider.modelId,
+      provider.dimension,
+      keepIds
+    );
 
     for (const document of documents) {
       const existing = this.queries.getEmbeddingDocument(document.id);
       if (existing && existing.contentHash === document.contentHash && existing.embedding) {
-        prepared.push({ ...document, embedding: existing.embedding });
+        this.queries.upsertEmbeddingDocument({ ...document, embedding: existing.embedding });
         continue;
       }
-      prepared.push({
+      this.queries.upsertEmbeddingDocument({
         ...document,
         embedding: await provider.embedDocument(document.content),
       });
       embedded++;
     }
 
-    this.queries.deleteEmbeddingDocumentsExcept(
-      provider.modelId,
-      provider.dimension,
-      new Set(documents.map((document) => document.id))
-    );
-    this.queries.upsertEmbeddingDocuments(prepared);
     return { documents: documents.length, embedded };
   }
 }

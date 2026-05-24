@@ -147,6 +147,91 @@ describe('Qwen retrieval document indexing', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('persists usage embeddings incrementally before declaration embeddings', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillgraph-qwen-incremental-'));
+    try {
+      fs.mkdirSync(path.join(root, 'src'));
+      fs.writeFileSync(
+        path.join(root, 'src', 'flow.ts'),
+        `export function target(value: string) {\n  return value.trim();\n}\n\nfunction consumer(value: string) {\n  return target(value);\n}\n`
+      );
+
+      const baseNode = {
+        kind: 'function',
+        filePath: 'src/flow.ts',
+        language: 'typescript',
+        startColumn: 0,
+        endColumn: 1,
+        updatedAt: 1,
+      } as const;
+      const targetNode: Node = {
+        ...baseNode,
+        id: 'target-node',
+        name: 'target',
+        qualifiedName: 'src/flow.ts::target',
+        startLine: 1,
+        endLine: 3,
+        signature: 'target(value: string)',
+        isExported: true,
+      };
+      const consumerNode: Node = {
+        ...baseNode,
+        id: 'consumer-node',
+        name: 'consumer',
+        qualifiedName: 'src/flow.ts::consumer',
+        startLine: 5,
+        endLine: 7,
+        signature: 'consumer(value: string)',
+        isExported: false,
+      };
+      const occurrence: ReferenceOccurrence = {
+        fromNodeId: consumerNode.id,
+        targetNodeId: targetNode.id,
+        referenceName: 'target',
+        referenceKind: 'calls',
+        filePath: 'src/flow.ts',
+        language: 'typescript',
+        line: 6,
+        column: 10,
+        sourceSlice: 'return target(value);',
+      };
+      const nodes = new Map([
+        [targetNode.id, targetNode],
+        [consumerNode.id, consumerNode],
+      ]);
+      const upserts: Array<{ scope: string; nodeId: string }> = [];
+      const queries = {
+        getAllNodes: () => [targetNode, consumerNode],
+        getNodeById: (id: string) => nodes.get(id) ?? null,
+        getReferenceOccurrencesByTarget: (id: string) => id === targetNode.id ? [occurrence] : [],
+        getEmbeddingDocument: () => null,
+        deleteEmbeddingDocumentsExcept: () => undefined,
+        upsertEmbeddingDocument: (document: { scope: string; nodeId: string }) => {
+          upserts.push({ scope: document.scope, nodeId: document.nodeId });
+        },
+      };
+      let calls = 0;
+      const provider = {
+        modelId: 'qwen-test',
+        dimension: 256 as const,
+        async embedDocument() {
+          calls++;
+          if (calls === 2) throw new Error('stop after first persisted embedding');
+          return new Float32Array([1, 0]);
+        },
+      };
+
+      await expect(
+        new RetrievalIndexer(root, queries as any, DEFAULT_CONFIG.qwen!)
+          .index(provider as any)
+      ).rejects.toThrow('stop after first persisted embedding');
+
+      expect(upserts).toEqual([{ scope: 'usage', nodeId: consumerNode.id }]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('Qwen retrieval config', () => {
