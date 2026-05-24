@@ -6,7 +6,9 @@ import {
   RetrievalIntent,
 } from '../types';
 import {
+  formatRerankInstruction,
   getDetailedInstruct,
+  RERANK_CODE_TASK,
   taskForIntent,
 } from './prompts';
 
@@ -15,9 +17,17 @@ const QWEN_RERANKER_MODEL_ID = 'Qwen3-Reranker-0.6B-GGUF';
 const DEFAULT_GGUF_QUANT = 'Q4_K_M';
 export const DEFAULT_QWEN_EMBEDDING_MODEL_REFERENCE = 'kerncore/Qwen3-Embedding-0.6B-GGUF';
 export const DEFAULT_QWEN_RERANKER_MODEL_REFERENCE = 'kerncore/Qwen3-Reranker-0.6B-Q4_K_M';
+const MAX_QWEN_EMBEDDING_CHARS = 6000;
+const KNOWN_QWEN_GGUF_FILES: Record<string, string> = {
+  [DEFAULT_QWEN_EMBEDDING_MODEL_REFERENCE]: 'qwen3-embedding-0.6b-q4_k_m.gguf',
+  [DEFAULT_QWEN_RERANKER_MODEL_REFERENCE]: 'Qwen.Qwen3-Reranker-0.6B.Q4_K_M.gguf',
+};
 
 type LlamaModule = {
   getLlama?: () => Promise<any>;
+  LlamaCompletion?: new (options: { contextSequence: any }) => {
+    generateCompletion(input: string, options?: Record<string, unknown>): Promise<string>;
+  };
   resolveModelFile?: (
     uriOrPath: string,
     options?: {
@@ -28,10 +38,19 @@ type LlamaModule = {
   ) => Promise<string>;
 };
 
+// tsc targets CommonJS for this package and rewrites import() to require().
+// node-llama-cpp is ESM-only, so keep the dynamic import intact at runtime.
+const importESM = new Function('specifier', 'return import(specifier)') as
+  (specifier: string) => Promise<LlamaModule>;
+let loadLlamaModule: () => Promise<LlamaModule> = () => importESM('node-llama-cpp');
+
+export function setQwenGgufLlamaModuleLoaderForTests(loader?: () => Promise<LlamaModule>): void {
+  loadLlamaModule = loader ?? (() => importESM('node-llama-cpp'));
+}
+
 async function loadNodeLlamaCpp(): Promise<LlamaModule> {
   try {
-    const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<LlamaModule>;
-    return await dynamicImport('node-llama-cpp');
+    return await loadLlamaModule();
   } catch (error) {
     throw new Error(
       `node-llama-cpp is required for Qwen GGUF retrieval. Install optional dependencies and configure qwen model paths. ${error instanceof Error ? error.message : String(error)}`
@@ -42,6 +61,8 @@ async function loadNodeLlamaCpp(): Promise<LlamaModule> {
 export function normalizeQwenGgufModelReference(modelReference: string): string {
   const trimmed = modelReference.trim();
   if (isBareQwenGgufHuggingFaceRepo(trimmed)) {
+    const knownFile = KNOWN_QWEN_GGUF_FILES[trimmed];
+    if (knownFile) return `hf:${trimmed}/${knownFile}`;
     return `hf:${trimmed}:${DEFAULT_GGUF_QUANT}`;
   }
 
@@ -70,6 +91,9 @@ export function normalizeQwenGgufModelReference(modelReference: string): string 
   if (filePath?.toLowerCase().endsWith('.gguf')) {
     return `hf:${repo}/${filePath}`;
   }
+
+  const knownFile = KNOWN_QWEN_GGUF_FILES[repo];
+  if (knownFile) return `hf:${repo}/${knownFile}`;
 
   return `hf:${repo}:${DEFAULT_GGUF_QUANT}`;
 }
@@ -110,6 +134,28 @@ function normalize(vector: Float32Array): Float32Array {
   return vector;
 }
 
+function truncateEmbeddingInput(text: string): string {
+  if (text.length <= MAX_QWEN_EMBEDDING_CHARS) return text;
+  const marker = '\n\n[...truncated for embedding...]\n\n';
+  const headLength = Math.floor((MAX_QWEN_EMBEDDING_CHARS - marker.length) * 0.7);
+  const tailLength = MAX_QWEN_EMBEDDING_CHARS - marker.length - headLength;
+  return text.slice(0, headLength) + marker + text.slice(-tailLength);
+}
+
+function formatQwenRerankerPrompt(query: string, document: string): string {
+  return [
+    '<|im_start|>system',
+    'Judge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>',
+    '<|im_start|>user',
+    formatRerankInstruction(RERANK_CODE_TASK, query, document) + '<|im_end|>',
+    '<|im_start|>assistant',
+    '<think>',
+    '',
+    '</think>',
+    '',
+  ].join('\n');
+}
+
 export interface EmbeddingProvider {
   embedQuery(query: string, intent: RetrievalIntent): Promise<Float32Array>;
   embedDocument(document: string): Promise<Float32Array>;
@@ -144,7 +190,7 @@ export class QwenGgufEmbeddingProvider implements EmbeddingProvider {
 
   private async embedRaw(text: string): Promise<Float32Array> {
     const context = await this.getContext();
-    const embedding = await context.getEmbeddingFor(text);
+    const embedding = await context.getEmbeddingFor(truncateEmbeddingInput(text));
     const vector = Array.from(embedding.vector ?? embedding);
     return truncateMatryoshka(vector as number[], this.dimension);
   }
@@ -229,11 +275,67 @@ export class QwenGgufRerankerProvider implements RerankerProvider {
           modelPath,
           gpuLayers: this.config.gpuLayers,
         });
-        return model.createRankingContext({
-          contextSize: this.config.contextSize,
-        });
+        try {
+          return await model.createRankingContext({
+            contextSize: this.config.contextSize,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!message.includes('Computing rankings is not supported')) throw error;
+          if (!mod.LlamaCompletion) {
+            throw new Error('node-llama-cpp LlamaCompletion is required for Qwen reranker fallback');
+          }
+          return createCompletionRerankingContext(model, mod.LlamaCompletion, this.config.contextSize);
+        }
       })();
     }
     return this.contextPromise;
   }
+}
+
+async function createCompletionRerankingContext(
+  model: any,
+  LlamaCompletion: new (options: { contextSequence: any }) => {
+    generateCompletion(input: string, options?: Record<string, unknown>): Promise<string>;
+  },
+  contextSize: number
+): Promise<{
+  rank(query: string, document: string): Promise<number>;
+  rankAndSort(query: string, documents: string[]): Promise<Array<{ document: string; score: number }>>;
+}> {
+  const context = await model.createContext({ contextSize });
+  const sequence = context.getSequence();
+  const completion = new LlamaCompletion({ contextSequence: sequence });
+
+  async function rank(query: string, document: string): Promise<number> {
+    if (typeof sequence.clearHistory === 'function') {
+      await sequence.clearHistory();
+    }
+    const response = await completion.generateCompletion(
+      formatQwenRerankerPrompt(query, document),
+      {
+        maxTokens: 3,
+        temperature: 0,
+        trimWhitespaceSuffix: true,
+        customStopTriggers: ['<|im_end|>'],
+      }
+    );
+    const normalized = response.trim().toLowerCase();
+    if (normalized.startsWith('yes')) return 1;
+    if (normalized.startsWith('no')) return 0;
+    return normalized.includes('yes') ? 0.5 : 0;
+  }
+
+  return {
+    rank,
+    async rankAndSort(query: string, documents: string[]) {
+      const scores = await Promise.all(
+        documents.map(async (document) => ({
+          document,
+          score: await rank(query, document),
+        }))
+      );
+      return scores.sort((a, b) => b.score - a.score);
+    },
+  };
 }
